@@ -33,7 +33,7 @@ except ImportError:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- Configuration ---
-TOKEN = '8937605213:AAH6BXJ6v8RvUOjhdFFf5aEP70t8Ih10ZnE'  # <-- Yahan apna Telegram bot token paste karo
+TOKEN = '8961337768:AAEOVqaStohXXcotRHI1HAGXq_OcQyB2ukc'  # <-- Yahan apna Telegram bot token paste karo
 OWNER_ID = int(os.environ.get('OWNER_ID', '7981498656'))
 ADMIN_ID = int(os.environ.get('ADMIN_ID', str(OWNER_ID)))
 YOUR_USERNAME = os.environ.get('OWNER_USERNAME', '@ARMAAN_x7x')
@@ -2119,7 +2119,7 @@ def _logic_updates_channel(message):
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        primary_inline_button("📢 UPDATE CHANNEL", url="https://t.me/HOSTINGxBOTxUPDATE")
+        primary_inline_button("📢 UPDATE", url="https://t.me/Armaanx7x")
     )
     bot.reply_to(message, stylish_text("📢 Our Channels:"), reply_markup=markup)
 
@@ -3022,11 +3022,11 @@ if Flask is not None:
 
     @app.get('/')
     def health():
-        return 'HOST is running', 200
+        return 'HOSTING is running', 200
 
     @app.get('/health')
     def health_check():
-        return {'status': 'ok', 'bot': 'host'}, 200
+        return {'status': 'ok', 'bot': 'hosting'}, 200
 
     # Stable private-looking path derived from the bot token.
     # The actual token is NOT put in the URL.
@@ -3108,7 +3108,7 @@ def start_bot_polling():
 
 
 def start_bot():
-    logger.info('HOST starting...')
+    logger.info('HOSTING starting...')
 
     # Render Web Service: webhook mode. Local/Termux: polling mode.
     if setup_render_webhook():
