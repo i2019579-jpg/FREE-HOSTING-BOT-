@@ -1,3663 +1,4847 @@
-# -*- coding: utf-8 -*-
-import telebot
-import subprocess
-import os
-import zipfile
-import tempfile
-import shutil
-from telebot import types
-import time
-from datetime import datetime, timedelta
-import psutil
-import sqlite3
+#TAHMID CODEX
+
+from __future__ import annotations
+
+import asyncio
+import html
 import json
 import logging
-import signal
-import threading
+import os
+import random
 import re
-import sys
-import atexit
-import requests
+import secrets
+import string
+import time
+from datetime import datetime, timedelta
 
-# --- Flask Keep Alive ---
-from flask import Flask
-from threading import Thread
+import aiosqlite
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
+from telegram.constants import ParseMode
+from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.request import HTTPXRequest
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
-app = Flask('')
 
-@app.route('/')
-def home():
-    return "POWRED-BY Junaid Niz"
+def _load_token() -> str:
+    token = os.environ.get("BOT_TOKEN")
+    if token:
+        return token.strip()
+    token_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.txt")
+    if os.path.exists(token_file):
+        with open(token_file, "r", encoding="utf-8") as f:
+            t = f.read().strip()
+            if t:
+                return t
+    raise RuntimeError(
+        "No bot token found. Set BOT_TOKEN env var, or create a token.txt "
+        "file next to main.py containing your bot token."
+    )
 
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
 
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-    print("Flask Keep-Alive server started.")
-# --- End Flask Keep Alive ---
+BOT_TOKEN = "8866988131:AAEQfxyC6A-j9mb3nBCV3O7OaaCkHqiAaqw"
+OWNER_ID = int(os.environ.get("OWNER_ID", "7981498656"))
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "FILESxSTORExROBOT")
+BOT_VERSION = "v15.0"
 
-# --- Configuration ---
-TOKEN = '8940793806:AAHiLhiEdeS8HTTomiPD1LOZiHIJig4sXWc'
-OWNER_ID = 5462547294
-ADMIN_ID = 5462547294
-YOUR_USERNAME = 'ARMAAN_x7x'
-UPDATE_CHANNEL = 'ARMAAN_BANNER'
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
 
-# Folder setup
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_BOTS_DIR = os.path.join(BASE_DIR, 'upload_bots')
-IROTECH_DIR = os.path.join(BASE_DIR, 'inf')
-DATABASE_PATH = os.path.join(IROTECH_DIR, 'bot_data.db')
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+log = logging.getLogger("")
 
-# File upload limits - FIXED VALUES
-FREE_USER_LIMIT = 5
-SUBSCRIBED_USER_LIMIT = float('inf')  # Unlimited for subscribed users
-ADMIN_LIMIT = float('inf')  # Unlimited for admins
-OWNER_LIMIT = float('inf')  # Unlimited for owner
-
-# Create necessary directories
-os.makedirs(UPLOAD_BOTS_DIR, exist_ok=True)
-os.makedirs(IROTECH_DIR, exist_ok=True)
-
-# Initialize bot
-bot = telebot.TeleBot(TOKEN)
-
-# --- Data structures ---
-bot_scripts = {}
-user_subscriptions = {}
-user_files = {}
-active_users = set()
-admin_ids = {ADMIN_ID, OWNER_ID}
-banned_users = set()
-user_limits = {}  # Custom limits per user
-bot_locked = False
-
-# --- Manual Modules Installation System ---
-pending_modules = {}  # {user_id: {module_name: package_name}}
-manual_install_requests = {}  # {admin_id: {user_id: {module_name: package_name}}}
-
-# --- Mandatory Channels/Groups ---
-mandatory_channels = {}  # {channel_id: {'username': 'channel_username', 'name': 'Channel Name'}}
-
-# Store pending ZIP files for approval
-pending_zip_files = {}  # {user_id: {file_name: file_content}}
-
-# --- Security Settings ---
-SECURITY_CONFIG = {
-    'blocked_modules': ['os.system', 'os', 'zipfile', 'subprocess.Popen', 'subprocess', 'eval', 'exec','compile', '__import__'],
-    'max_file_size': 20 * 1024 * 1024,  # 20MB
-    'max_script_runtime': 3600,  # 1 hour
-    'allowed_extensions': ['.py', '.js'],
-    'blocked_imports': ['shutil.rmtree', 'subprocess','os.remove', 'os.unlink']
+DEFAULT_SETTINGS = {
+    "bot_name": "FILE STORE BOT",
+    "referral_reward": "20",
+    "daily_bonus": "25",
+    "premium_daily_bonus_multiplier": "2",
+    "premium_daily_bonus": "40",
+    "support_username": "ARMAAN_x7x",
+    "payment_username": "ARMAAN_x7x",
+    "force_join": "1",
+    "maintenance": "0",
+    "star_rate": "30",
+    "coin_packages": json.dumps([
+        {"coins": 100, "stars": 3},
+        {"coins": 500, "stars": 15},
+        {"coins": 1000, "stars": 28},
+        {"coins": 2500, "stars": 65},
+        {"coins": 5000, "stars": 120},
+    ]),
+    "premium_pricing": json.dumps([
+        {"days": 7, "price": 300},
+        {"days": 30, "price": 900},
+        {"days": 90, "price": 2200},
+        {"days": 0, "price": 6000},
+    ]),
+    "coin_rate_bdt": "5",
+    "bdt_payment_details": "bKash (Send Money): 01XXXXXXXXX\nNagad (Send Money): 01XXXXXXXXX",
+    "spin_settings": json.dumps({
+        "chance_coins_low": 50,
+        "chance_coins_high": 25,
+        "chance_file": 10,
+        "chance_premium": 15,
+        "coins_low_min": 20,
+        "coins_low_max": 140,
+        "coins_high_min": 150,
+        "coins_high_max": 300,
+        "premium_days": 7,
+    }),
+    "mystery_box_pricing": json.dumps([
+        {"tier": "random", "label": "🎁 Random File", "price": 100},
+        {"tier": "rare", "label": "💎 Rare File", "price": 500},
+        {"tier": "premium", "label": "👑 Premium Project", "price": 1000},
+    ]),
+    "referral_milestones": json.dumps([
+        {"count": 5, "reward": 100},
+        {"count": 10, "reward": 250},
+        {"count": 25, "reward": 700},
+        {"count": 50, "reward": 1500},
+    ]),
+    "streak_rewards": json.dumps([
+        {"days": 3, "reward": 30},
+        {"days": 7, "reward": 100},
+        {"days": 14, "reward": 250},
+        {"days": 30, "reward": 600},
+    ]),
 }
 
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+FILE_TYPE_ICON = {
+    "document": "📄", "video": "🎬", "audio": "🎵", "photo": "🖼",
+    "voice": "🎙", "animation": "🎞", "video_note": "🎥",
+}
 
-# --- Command Button Layouts ---
-COMMAND_BUTTONS_LAYOUT_USER_SPEC = [
-    ["📢 Updates Channel"],
-    ["📤 Upload File", "📂 Check Files"],
-    ["⚡ Bot Speed", "📊 Statistics"],
-    ["📞 Contact Owner"],
-    ["📦 Manual Install", "🆘 Help"]
-]
+USE_CUSTOM_EMOJI = False
+CUSTOM_EMOJI: dict[str, str] = {
+}
 
-ADMIN_COMMAND_BUTTONS_LAYOUT_USER_SPEC = [
-    ["📢 Updates Channel"],
-    ["📤 Upload File", "📂 Check Files"],
-    ["⚡ Bot Speed", "📊 Statistics"],
-    ["💳 Subscriptions", "📢 Broadcast"],
-    ["🔒 Lock Bot", "🟢 Running All Code"],
-    ["👑 Admin Panel", "📞 Contact Owner"],
-    ["📢 Channel Add", "🛠️ Manual Install"],
-    ["👥 User Management", "⚙️ Settings"]
-]
+DIVIDER = "───────────────────"
 
-# --- Database Setup ---
-def init_db():
-    """Initialize the database with required tables"""
-    logger.info(f"Initializing database at: {DATABASE_PATH}")
+
+_db_lock = asyncio.Lock()
+
+
+DUPLICATE_COOLDOWN_SECONDS = 0.6
+FLOOD_WINDOW_SECONDS = 3.0
+FLOOD_MAX_ACTIONS = 12
+
+_last_action_by_key: dict[tuple[int, str], float] = {}
+_recent_action_times: dict[int, list[float]] = {}
+
+_user_action_locks: dict[int, asyncio.Lock] = {}
+_user_action_locks_guard = asyncio.Lock()
+
+
+async def get_user_action_lock(user_id: int) -> asyncio.Lock:
+    async with _user_action_locks_guard:
+        lock = _user_action_locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _user_action_locks[user_id] = lock
+        return lock
+
+
+async def group_restriction_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat is None or chat.type == "private":
+        return
+
+    if update.callback_query:
+        is_bot_trigger = True
+    else:
+        msg = update.message
+        if msg is None or not msg.text:
+            return
+        is_bot_trigger = msg.text.startswith("/") or msg.text in TEXT_ROUTES
+
+    if not is_bot_trigger:
+        return
+
     try:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS subscriptions
-                     (user_id INTEGER PRIMARY KEY, expiry TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS user_files
-                     (user_id INTEGER, file_name TEXT, file_type TEXT,
-                      PRIMARY KEY (user_id, file_name))''')
-        c.execute('''CREATE TABLE IF NOT EXISTS active_users
-                     (user_id INTEGER PRIMARY KEY, join_date TEXT, last_seen TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS admins
-                     (user_id INTEGER PRIMARY KEY, added_by INTEGER, added_date TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS banned_users
-                     (user_id INTEGER PRIMARY KEY, reason TEXT, banned_by INTEGER, ban_date TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS user_limits
-                     (user_id INTEGER PRIMARY KEY, file_limit INTEGER, set_by INTEGER, set_date TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS mandatory_channels
-                     (channel_id TEXT PRIMARY KEY, 
-                      channel_username TEXT,
-                      channel_name TEXT,
-                      added_by INTEGER,
-                      added_date TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS install_logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id INTEGER,
-                      module_name TEXT,
-                      package_name TEXT,
-                      status TEXT,
-                      log TEXT,
-                      install_date TEXT)''')
-        
-        c.execute('INSERT OR IGNORE INTO admins (user_id, added_by, added_date) VALUES (?, ?, ?)', 
-                  (OWNER_ID, OWNER_ID, datetime.now().isoformat()))
-        if ADMIN_ID != OWNER_ID:
-            c.execute('INSERT OR IGNORE INTO admins (user_id, added_by, added_date) VALUES (?, ?, ?)', 
-                      (ADMIN_ID, OWNER_ID, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-        logger.info("Database initialized successfully.")
-    except Exception as e:
-        logger.error(f"❌ Database initialization error: {e}", exc_info=True)
+        await update.effective_message.reply_text("📩 Please Use this bot in Bot DM.")
+    except TelegramError:
+        pass
+    raise ApplicationHandlerStop
 
-def load_data():
-    """Load data from database into memory"""
-    logger.info("Loading data from database...")
-    try:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
 
-        # Load subscriptions
-        c.execute('SELECT user_id, expiry FROM subscriptions')
-        for user_id, expiry in c.fetchall():
+async def flood_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None:
+        return
+
+    if update.callback_query:
+        action_id = update.callback_query.data or ""
+    elif update.message and update.message.text:
+        action_id = update.message.text
+    else:
+        return
+
+    now = time.monotonic()
+
+    key = (user.id, action_id)
+    last_same = _last_action_by_key.get(key, 0.0)
+    _last_action_by_key[key] = now
+    if now - last_same < DUPLICATE_COOLDOWN_SECONDS:
+        if update.callback_query:
             try:
-                user_subscriptions[user_id] = {'expiry': datetime.fromisoformat(expiry)}
-            except ValueError:
-                logger.warning(f"⚠️ Invalid expiry date format for user {user_id}: {expiry}. Skipping.")
+                await update.callback_query.answer()
+            except TelegramError:
+                pass
+        raise ApplicationHandlerStop
 
-        # Load user files
-        c.execute('SELECT user_id, file_name, file_type FROM user_files')
-        for user_id, file_name, file_type in c.fetchall():
-            if user_id not in user_files:
-                user_files[user_id] = []
-            user_files[user_id].append((file_name, file_type))
+    history = _recent_action_times.setdefault(user.id, [])
+    history[:] = [t for t in history if now - t < FLOOD_WINDOW_SECONDS]
+    history.append(now)
+    if len(history) > FLOOD_MAX_ACTIONS:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer("⏳ Please slow down a little.", show_alert=False)
+            except TelegramError:
+                pass
+        raise ApplicationHandlerStop
 
-        # Load active users
-        c.execute('SELECT user_id FROM active_users')
-        active_users.update(user_id for (user_id,) in c.fetchall())
 
-        # Load admins
-        c.execute('SELECT user_id FROM admins')
-        admin_ids.update(user_id for (user_id,) in c.fetchall())
+class RateLimiter:
+    def __init__(self, rate: float):
+        self.interval = 1.0 / rate
+        self._lock = asyncio.Lock()
+        self._next_time = time.monotonic()
 
-        # Load banned users
-        c.execute('SELECT user_id FROM banned_users')
-        banned_users.update(user_id for (user_id,) in c.fetchall())
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._next_time - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = time.monotonic()
+            self._next_time = now + self.interval
 
-        # Load user limits
-        c.execute('SELECT user_id, file_limit FROM user_limits')
-        for user_id, file_limit in c.fetchall():
-            user_limits[user_id] = file_limit
 
-        # Load mandatory channels
-        c.execute('SELECT channel_id, channel_username, channel_name FROM mandatory_channels')
-        for channel_id, channel_username, channel_name in c.fetchall():
-            mandatory_channels[channel_id] = {
-                'username': channel_username,
-                'name': channel_name
-            }
+TELEGRAM_SEND_LIMITER = RateLimiter(25)
 
-        conn.close()
-        logger.info(f"Data loaded: {len(active_users)} users, {len(user_subscriptions)} subscriptions, {len(admin_ids)} admins, {len(banned_users)} banned users, {len(user_limits)} custom limits, {len(mandatory_channels)} mandatory channels.")
-    except Exception as e:
-        logger.error(f"❌ Error loading data: {e}", exc_info=True)
+DB_POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "64"))
+_db_pool: "asyncio.Queue[aiosqlite.Connection]" = None
 
-# Initialize DB and Load Data at startup
-init_db()
-load_data()
 
-# --- Security Functions ---
-def check_code_security(file_path, file_type):
-    """Check code for dangerous commands (lightweight version)"""
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        
-        # Dangerous patterns with regex
-        dangerous_patterns = [
-            r'\bos\.system\b',
-            r'\bsubprocess\.Popen\b',
-            r'\beval\b',
-            r'\bexec\b',
-            r'rm\s+-rf',
-            r'format\s+c:',
-            r'rm\s+-rf\s+/',
-            r'\b__import__\b',
+async def init_db_pool() -> None:
+    global _db_pool
+    _db_pool = asyncio.Queue(maxsize=DB_POOL_SIZE)
+    for _ in range(DB_POOL_SIZE):
+        conn = await aiosqlite.connect(DB_PATH)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode = WAL;")
+        await conn.execute("PRAGMA synchronous = NORMAL;")
+        await conn.execute("PRAGMA busy_timeout = 8000;")
+        await conn.execute("PRAGMA foreign_keys = ON;")
+        await _db_pool.put(conn)
+    log.info("DB connection pool ready (%d connections)", DB_POOL_SIZE)
+
+
+async def close_db_pool() -> None:
+    if _db_pool is None:
+        return
+    while not _db_pool.empty():
+        conn = await _db_pool.get()
+        await conn.close()
+
+
+class _PooledConnection:
+    """Async context manager — borrows a connection from the shared pool
+    instead of opening a new one. Drop-in replacement for
+    `aiosqlite.connect(DB_PATH)` at every call site."""
+
+    async def __aenter__(self) -> aiosqlite.Connection:
+        self.conn = await _db_pool.get()
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await _db_pool.put(self.conn)
+
+
+def db_conn() -> _PooledConnection:
+    return _PooledConnection()
+
+
+async def init_db() -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                join_date TEXT,
+                is_banned INTEGER DEFAULT 0,
+                referred_by INTEGER,
+                last_bonus_time TEXT,
+                last_seen TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS files (
+                file_pk INTEGER PRIMARY KEY AUTOINCREMENT,
+                tg_file_id TEXT NOT NULL,
+                tg_file_unique_id TEXT,
+                file_kind TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size INTEGER DEFAULT 0,
+                description TEXT DEFAULT '',
+                price INTEGER DEFAULT 0,
+                upload_date TEXT,
+                downloads_count INTEGER DEFAULT 0,
+                uploaded_by INTEGER,
+                premium_only INTEGER DEFAULT 0,
+                is_deleted INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS wallet (
+                user_id INTEGER PRIMARY KEY,
+                coins INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS transactions (
+                tx_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                tx_type TEXT,
+                amount INTEGER,
+                description TEXT,
+                timestamp TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS payments (
+                payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                stars INTEGER,
+                coins INTEGER,
+                screenshot_file_id TEXT,
+                status TEXT DEFAULT 'pending',
+                admin_id INTEGER,
+                reason TEXT,
+                timestamp TEXT,
+                payment_method TEXT DEFAULT 'stars',
+                amount_bdt INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS redeems (
+                code TEXT PRIMARY KEY,
+                coin_reward INTEGER DEFAULT 0,
+                premium_days INTEGER DEFAULT 0,
+                usage_limit INTEGER DEFAULT 0,
+                used_count INTEGER DEFAULT 0,
+                expiry_date TEXT,
+                status TEXT DEFAULT 'active',
+                created_by INTEGER,
+                created_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS redeem_uses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                user_id INTEGER,
+                timestamp TEXT,
+                UNIQUE(code, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                new_user_id INTEGER UNIQUE,
+                date TEXT,
+                reward INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS force_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                chat_id INTEGER,
+                title TEXT,
+                invite_link TEXT,
+                chat_type TEXT,
+                added_date TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id INTEGER PRIMARY KEY,
+                added_date TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                file_pk INTEGER,
+                timestamp TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS premium (
+                user_id INTEGER PRIMARY KEY,
+                expiry_date TEXT,
+                is_lifetime INTEGER DEFAULT 0,
+                granted_by INTEGER,
+                granted_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                file_pk INTEGER,
+                price INTEGER,
+                timestamp TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS tickets (
+                ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                subject TEXT,
+                body TEXT,
+                status TEXT DEFAULT 'open',
+                admin_id INTEGER,
+                created_at TEXT,
+                closed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER,
+                action_text TEXT,
+                timestamp TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS file_requests (
+                request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                request_text TEXT,
+                status TEXT DEFAULT 'open',
+                timestamp TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_files_deleted ON files(is_deleted);
+            CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_purchases_user_file ON purchases(user_id, file_pk);
+            CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
+            """
+        )
+        await db.commit()
+
+        migrations = [
+            ("files", "premium_only", "INTEGER DEFAULT 0"),
+            ("payments", "payment_method", "TEXT DEFAULT 'stars'"),
+            ("payments", "amount_bdt", "INTEGER"),
+            ("redeems", "source", "TEXT DEFAULT 'admin'"),
+            ("admins", "role", "TEXT DEFAULT 'junior'"),
+            ("users", "login_streak", "INTEGER DEFAULT 0"),
+            ("users", "last_login_date", "TEXT"),
+            ("users", "referral_milestone_reached", "INTEGER DEFAULT 0"),
+            ("force_channels", "chat_type", "TEXT"),
+            ("force_channels", "invite_link", "TEXT"),
+            ("users", "spin_count_today", "INTEGER DEFAULT 0"),
+            ("users", "spin_reset_date", "TEXT"),
+            ("files", "mystery_tier", "TEXT"),
+            ("files", "featured", "INTEGER DEFAULT 0"),
         ]
-        
-        found_patterns = []
-        for pattern in dangerous_patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                found_patterns.append(pattern)
-        
-        if found_patterns:
-            logger.warning(f"🚨 Dangerous patterns detected in {file_path}: {found_patterns}")
-            return False, f"Code contains dangerous commands: {', '.join(found_patterns[:5])}"
-        
-        return True, "Code is safe"
-    except Exception as e:
-        logger.error(f"Error in security check: {e}")
-        return False, f"Security check error: {str(e)}"
+        for table, column, coltype in migrations:
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+                await db.commit()
+                log.info("Migrated: added %s.%s", table, column)
+            except aiosqlite.OperationalError:
+                pass
 
-def scan_zip_security(zip_path):
-    """Check ZIP contents for security (lightweight version)"""
-    try:
-        dangerous_patterns = [
-            r'\bos\.system\b',
-            r'\bsubprocess\.Popen\b',
-            r'\beval\b',
-            r'rm\s+-rf\s+/',
-        ]
-        
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            for file_info in zip_ref.infolist():
-                if file_info.filename.endswith(('.py', '.js', '.zip', '.txt', '.sh', '.bat', '.cmd')):
-                    with zip_ref.open(file_info.filename) as f:
-                        try:
-                            content = f.read().decode('utf-8', errors='ignore')
-                        except:
-                            continue
-                        
-                        for pattern in dangerous_patterns:
-                            if re.search(pattern, content, re.IGNORECASE):
-                                return False, f"File {file_info.filename} contains dangerous command: {pattern}"
-        return True, "Archive is safe"
-    except Exception as e:
-        return False, f"Error scanning archive: {str(e)}"
+        for k, v in DEFAULT_SETTINGS.items():
+            await db.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v)
+            )
+        await db.execute(
+            "INSERT OR IGNORE INTO admins (user_id, added_date) VALUES (?, ?)",
+            (OWNER_ID, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+    log.info("Database ready at %s", DB_PATH)
 
-# --- Mandatory Channels Functions ---
-def is_user_member(user_id, channel_id):
-    """Check if user is member of a channel"""
-    try:
-        chat_member = bot.get_chat_member(channel_id, user_id)
-        return chat_member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logger.error(f"Error checking channel membership for {user_id} in {channel_id}: {e}")
+
+
+async def get_setting(key: str, default: str = "") -> str:
+    async with db_conn() as db:
+        cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else default
+
+
+async def set_setting(key: str, value: str) -> None:
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
+
+async def ensure_user(user_id: int, username: str | None, first_name: str | None,
+                       referred_by: int | None = None) -> bool:
+    """Returns True if this is a newly created user."""
+    async with db_conn() as db:
+        cur = await db.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+        exists = await cur.fetchone()
+        now = datetime.utcnow().isoformat()
+        if exists:
+            await db.execute(
+                "UPDATE users SET username=?, first_name=?, last_seen=? WHERE user_id=?",
+                (username, first_name, now, user_id),
+            )
+            await db.commit()
+            return False
+        await db.execute(
+            "INSERT INTO users (user_id, username, first_name, join_date, referred_by, last_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, username, first_name, now, referred_by, now),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO wallet (user_id, coins) VALUES (?, 0)", (user_id,)
+        )
+        await db.commit()
+        return True
+
+
+async def is_admin(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    async with db_conn() as db:
+        cur = await db.execute("SELECT 1 FROM admins WHERE user_id=?", (user_id,))
+        return (await cur.fetchone()) is not None
+
+
+async def is_banned(user_id: int) -> bool:
+    async with db_conn() as db:
+        cur = await db.execute("SELECT is_banned FROM users WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return bool(row and row[0])
+
+
+async def get_user_row(user_id: int):
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        return await cur.fetchone()
+
+
+
+async def get_balance(user_id: int) -> int:
+    async with db_conn() as db:
+        cur = await db.execute("SELECT coins FROM wallet WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if row is None:
+            await db.execute("INSERT OR IGNORE INTO wallet (user_id, coins) VALUES (?, 0)", (user_id,))
+            await db.commit()
+            return 0
+        return row[0]
+
+
+async def add_coins(user_id: int, amount: int, tx_type: str, description: str = "") -> int:
+    async with _db_lock:
+        async with db_conn() as db:
+            await db.execute(
+                "INSERT INTO wallet (user_id, coins) VALUES (?, 0) "
+                "ON CONFLICT(user_id) DO NOTHING", (user_id,)
+            )
+            await db.execute(
+                "UPDATE wallet SET coins = coins + ? WHERE user_id=?", (amount, user_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, tx_type, amount, description, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, tx_type, amount, description, datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+            cur = await db.execute("SELECT coins FROM wallet WHERE user_id=?", (user_id,))
+            row = await cur.fetchone()
+            return row[0]
+
+
+async def remove_coins(user_id: int, amount: int, tx_type: str, description: str = "") -> bool:
+    """Returns False if insufficient balance."""
+    async with _db_lock:
+        async with db_conn() as db:
+            cur = await db.execute("SELECT coins FROM wallet WHERE user_id=?", (user_id,))
+            row = await cur.fetchone()
+            bal = row[0] if row else 0
+            if bal < amount:
+                return False
+            await db.execute(
+                "UPDATE wallet SET coins = coins - ? WHERE user_id=?", (amount, user_id)
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, tx_type, amount, description, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, tx_type, -amount, description, datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+            return True
+
+
+
+async def get_premium(user_id: int):
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM premium WHERE user_id=?", (user_id,))
+        return await cur.fetchone()
+
+
+async def is_premium_active(user_id: int) -> bool:
+    row = await get_premium(user_id)
+    if not row:
         return False
-
-def check_mandatory_subscription(user_id):
-    """Check if user is subscribed to all mandatory channels"""
-    if not mandatory_channels:
-        return True, []  # No mandatory channels exist
-    
-    not_joined = []
-    for channel_id, channel_info in mandatory_channels.items():
-        if not is_user_member(user_id, channel_id):
-            not_joined.append((channel_id, channel_info))
-    
-    if not_joined:
-        return False, not_joined
-    return True, []
-
-def save_mandatory_channel(channel_id, channel_username, channel_name, added_by):
-    """Save mandatory channel to database"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            added_date = datetime.now().isoformat()
-            c.execute('INSERT OR REPLACE INTO mandatory_channels (channel_id, channel_username, channel_name, added_by, added_date) VALUES (?, ?, ?, ?, ?)',
-                      (channel_id, channel_username, channel_name, added_by, added_date))
-            conn.commit()
-            mandatory_channels[channel_id] = {
-                'username': channel_username,
-                'name': channel_name
-            }
-            logger.info(f"Saved mandatory channel: {channel_name} ({channel_id})")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error saving channel: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error saving channel: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-def remove_mandatory_channel_db(channel_id):
-    """Remove mandatory channel from database"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('DELETE FROM mandatory_channels WHERE channel_id = ?', (channel_id,))
-            conn.commit()
-            if channel_id in mandatory_channels:
-                del mandatory_channels[channel_id]
-            logger.info(f"Removed mandatory channel: {channel_id}")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error removing channel: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error removing channel: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-def create_mandatory_channels_menu():
-    """Create mandatory channels management menu"""
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('➕ Add Channel', callback_data='add_mandatory_channel'),
-        types.InlineKeyboardButton('➖ Remove Channel', callback_data='remove_mandatory_channel')
-    )
-    markup.row(types.InlineKeyboardButton('📋 List Channels', callback_data='list_mandatory_channels'))
-    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
-    return markup
-
-def create_subscription_check_message(not_joined_channels):
-    """Create subscription verification message"""
-    message = "📢 **Important: Join Our Channels First:**\n\n"
-    
-    markup = types.InlineKeyboardMarkup()
-    
-    for channel_id, channel_info in not_joined_channels:
-        channel_username = channel_info.get('username', '')
-        channel_name = channel_info.get('name', 'Channel')
-        
-        if channel_username:
-            channel_link = f"https://t.me/{channel_username.replace('@', '')}"
-        else:
-            channel_link = f"https://t.me/c/{channel_id.replace('-100', '')}"
-        
-        message += f"• {channel_name}\n"
-        markup.add(types.InlineKeyboardButton(f"Join {channel_name}", url=channel_link))
-    
-    markup.add(types.InlineKeyboardButton("✅ Verify Subscription", callback_data='check_subscription_status'))
-    
-    return message, markup
-
-# --- Database Lock ---
-DB_LOCK = threading.Lock()
-
-# --- User Management Functions ---
-def is_user_banned(user_id):
-    """Check if user is banned"""
-    return user_id in banned_users
-
-def ban_user_db(user_id, reason, banned_by):
-    """Ban a user"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            ban_date = datetime.now().isoformat()
-            c.execute('INSERT OR REPLACE INTO banned_users (user_id, reason, banned_by, ban_date) VALUES (?, ?, ?, ?)',
-                      (user_id, reason, banned_by, ban_date))
-            conn.commit()
-            banned_users.add(user_id)
-            logger.warning(f"User {user_id} banned by {banned_by}. Reason: {reason}")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error banning user {user_id}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error banning user {user_id}: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-def unban_user_db(user_id):
-    """Unban a user"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('DELETE FROM banned_users WHERE user_id = ?', (user_id,))
-            conn.commit()
-            banned_users.discard(user_id)
-            logger.info(f"User {user_id} unbanned")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error unbanning user {user_id}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error unbanning user {user_id}: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-def set_user_limit_db(user_id, limit, set_by):
-    """Set custom file limit for a user"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            set_date = datetime.now().isoformat()
-            c.execute('INSERT OR REPLACE INTO user_limits (user_id, file_limit, set_by, set_date) VALUES (?, ?, ?, ?)',
-                      (user_id, limit, set_by, set_date))
-            conn.commit()
-            user_limits[user_id] = limit
-            logger.info(f"Set file limit {limit} for user {user_id} by {set_by}")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error setting limit for user {user_id}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error setting limit for user {user_id}: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-def remove_user_limit_db(user_id):
-    """Remove custom file limit for a user"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('DELETE FROM user_limits WHERE user_id = ?', (user_id,))
-            conn.commit()
-            if user_id in user_limits:
-                del user_limits[user_id]
-            logger.info(f"Removed custom limit for user {user_id}")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error removing limit for user {user_id}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error removing limit for user {user_id}: {e}", exc_info=True)
-            return False
-        finally:
-            conn.close()
-
-# --- Modified Helper Functions ---
-def get_user_folder(user_id):
-    """Get or create user's folder for storing files"""
-    user_folder = os.path.join(UPLOAD_BOTS_DIR, str(user_id))
-    os.makedirs(user_folder, exist_ok=True)
-    return user_folder
-
-def get_user_file_limit(user_id):
-    """Get the file upload limit for a user"""
-    if user_id == OWNER_ID: return OWNER_LIMIT
-    if user_id in admin_ids: return ADMIN_LIMIT
-    if user_id in user_limits: return user_limits[user_id]
-    if user_id in user_subscriptions and user_subscriptions[user_id]['expiry'] > datetime.now():
-        return SUBSCRIBED_USER_LIMIT
-    return FREE_USER_LIMIT
-
-def get_user_file_count(user_id):
-    """Get the number of files uploaded by a user"""
-    return len(user_files.get(user_id, []))
-
-def is_bot_running(script_owner_id, file_name):
-    """Check if a bot script is currently running for a specific user"""
-    script_key = f"{script_owner_id}_{file_name}"
-    script_info = bot_scripts.get(script_key)
-    if script_info and script_info.get('process'):
-        try:
-            proc = psutil.Process(script_info['process'].pid)
-            is_running = proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
-            if not is_running:
-                logger.warning(f"Process {script_info['process'].pid} for {script_key} found in memory but not running/zombie. Cleaning up.")
-                if 'log_file' in script_info and hasattr(script_info['log_file'], 'close') and not script_info['log_file'].closed:
-                    try:
-                        script_info['log_file'].close()
-                    except Exception as log_e:
-                        logger.error(f"Error closing log file during zombie cleanup {script_key}: {log_e}")
-                if script_key in bot_scripts:
-                    del bot_scripts[script_key]
-            return is_running
-        except psutil.NoSuchProcess:
-            logger.warning(f"Process for {script_key} not found (NoSuchProcess). Cleaning up.")
-            if 'log_file' in script_info and hasattr(script_info['log_file'], 'close') and not script_info['log_file'].closed:
-                try:
-                     script_info['log_file'].close()
-                except Exception as log_e:
-                     logger.error(f"Error closing log file during cleanup of non-existent process {script_key}: {log_e}")
-            if script_key in bot_scripts:
-                 del bot_scripts[script_key]
-            return False
-        except Exception as e:
-            logger.error(f"Error checking process status for {script_key}: {e}", exc_info=True)
-            return False
+    if row["is_lifetime"]:
+        return True
+    if row["expiry_date"] and datetime.fromisoformat(row["expiry_date"]) > datetime.utcnow():
+        return True
     return False
 
-def kill_process_tree(process_info):
-    """Kill a process and all its children, ensuring log file is closed."""
-    pid = None
-    log_file_closed = False
-    script_key = process_info.get('script_key', 'N/A') 
 
-    try:
-        if 'log_file' in process_info and hasattr(process_info['log_file'], 'close') and not process_info['log_file'].closed:
-            try:
-                process_info['log_file'].close()
-                log_file_closed = True
-                logger.info(f"Closed log file for {script_key} (PID: {process_info.get('process', {}).get('pid', 'N/A')})")
-            except Exception as log_e:
-                logger.error(f"Error closing log file during kill for {script_key}: {log_e}")
-
-        process = process_info.get('process')
-        if process and hasattr(process, 'pid'):
-           pid = process.pid
-           if pid: 
-                try:
-                    parent = psutil.Process(pid)
-                    children = parent.children(recursive=True)
-                    logger.info(f"Attempting to kill process tree for {script_key} (PID: {pid}, Children: {[c.pid for c in children]})")
-
-                    for child in children:
-                        try:
-                            child.terminate()
-                            logger.info(f"Terminated child process {child.pid} for {script_key}")
-                        except psutil.NoSuchProcess:
-                            logger.warning(f"Child process {child.pid} for {script_key} already gone.")
-                        except Exception as e:
-                            logger.error(f"Error terminating child {child.pid} for {script_key}: {e}. Trying kill...")
-                            try: child.kill(); logger.info(f"Killed child process {child.pid} for {script_key}")
-                            except Exception as e2: logger.error(f"Failed to kill child {child.pid} for {script_key}: {e2}")
-
-                    gone, alive = psutil.wait_procs(children, timeout=1)
-                    for p in alive:
-                        logger.warning(f"Child process {p.pid} for {script_key} still alive. Killing.")
-                        try: p.kill()
-                        except Exception as e: logger.error(f"Failed to kill child {p.pid} for {script_key} after wait: {e}")
-
-                    try:
-                        parent.terminate()
-                        logger.info(f"Terminated parent process {pid} for {script_key}")
-                        try: parent.wait(timeout=1)
-                        except psutil.TimeoutExpired:
-                            logger.warning(f"Parent process {pid} for {script_key} did not terminate. Killing.")
-                            parent.kill()
-                            logger.info(f"Killed parent process {pid} for {script_key}")
-                    except psutil.NoSuchProcess:
-                        logger.warning(f"Parent process {pid} for {script_key} already gone.")
-                    except Exception as e:
-                        logger.error(f"Error terminating parent {pid} for {script_key}: {e}. Trying kill...")
-                        try: parent.kill(); logger.info(f"Killed parent process {pid} for {script_key}")
-                        except Exception as e2: logger.error(f"Failed to kill parent {pid} for {script_key}: {e2}")
-
-                except psutil.NoSuchProcess:
-                    logger.warning(f"Process {pid or 'N/A'} for {script_key} not found during kill. Already terminated?")
-           else: logger.error(f"Process PID is None for {script_key}.")
-        elif log_file_closed: logger.warning(f"Process object missing for {script_key}, but log file closed.")
-        else: logger.error(f"Process object missing for {script_key}, and no log file. Cannot kill.")
-    except Exception as e:
-        logger.error(f"❌ Unexpected error killing process tree for PID {pid or 'N/A'} ({script_key}): {e}", exc_info=True)
-
-# --- Map Telegram import names to actual PyPI package names ---
-TELEGRAM_MODULES = {
-    'telebot': 'pyTelegramBotAPI',
-    'telegram': 'python-telegram-bot',
-    'aiogram': 'aiogram',
-    'pyrogram': 'pyrogram',
-    'telethon': 'telethon',
-    'requests': 'requests',
-    'pillow': 'Pillow',
-    'cv2': 'opencv-python',
-    'yaml': 'PyYAML',
-    'dotenv': 'python-dotenv',
-    'pandas': 'pandas',
-    'numpy': 'numpy',
-    'flask': 'Flask',
-    'bs4': 'beautifulsoup4',
-    'psutil': 'psutil',
-}
-
-# --- Manual Modules Installation System ---
-def save_install_log(user_id, module_name, package_name, status, log):
-    """Save installation log to database"""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            install_date = datetime.now().isoformat()
-            c.execute('INSERT INTO install_logs (user_id, module_name, package_name, status, log, install_date) VALUES (?, ?, ?, ?, ?, ?)',
-                      (user_id, module_name, package_name, status, log, install_date))
-            conn.commit()
-            logger.info(f"Saved install log for user {user_id}: {module_name} - {status}")
-        except sqlite3.Error as e:
-            logger.error(f"❌ SQLite error saving install log: {e}")
-        except Exception as e:
-            logger.error(f"❌ Unexpected error saving install log: {e}", exc_info=True)
-        finally:
-            conn.close()
-
-def attempt_install_pip(module_name, message, manual_request=False):
-    """Install Python package via pip"""
-    package_name = TELEGRAM_MODULES.get(module_name.lower(), module_name) 
-    if package_name is None: 
-        logger.info(f"Module '{module_name}' is core. Skipping pip install.")
-        return False, "Core module - no installation needed"
-    
-    try:
-        if manual_request:
-            bot.reply_to(message, f"🔄 Manual installation requested for `{module_name}` -> `{package_name}`...", parse_mode='Markdown')
+async def grant_premium(user_id: int, days: int | None, admin_id: int) -> None:
+    async with db_conn() as db:
+        if days is None:
+            await db.execute(
+                "INSERT INTO premium (user_id, expiry_date, is_lifetime, granted_by, granted_at) "
+                "VALUES (?, NULL, 1, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+                "expiry_date=NULL, is_lifetime=1, granted_by=excluded.granted_by, granted_at=excluded.granted_at",
+                (user_id, admin_id, datetime.utcnow().isoformat()),
+            )
         else:
-            bot.reply_to(message, f"🐍 Module `{module_name}` not found. Installing `{package_name}`...", parse_mode='Markdown')
-        
-        command = [sys.executable, '-m', 'pip', 'install', package_name]
-        logger.info(f"Running install: {' '.join(command)}")
-        result = subprocess.run(command, capture_output=True, text=True, check=False, encoding='utf-8', errors='ignore')
-        
-        if result.returncode == 0:
-            log_msg = f"Installed {package_name}. Output:\n{result.stdout}"
-            logger.info(log_msg)
-            success_msg = f"✅ Package `{package_name}` (for `{module_name}`) installed successfully."
-            bot.reply_to(message, success_msg, parse_mode='Markdown')
-            save_install_log(message.from_user.id, module_name, package_name, "success", log_msg)
-            return True, log_msg
-        else:
-            error_msg = f"❌ Failed to install `{package_name}` for `{module_name}`.\nLog:\n```\n{result.stderr or result.stdout}\n```"
-            logger.error(error_msg)
-            if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
-            bot.reply_to(message, error_msg, parse_mode='Markdown')
-            save_install_log(message.from_user.id, module_name, package_name, "failed", error_msg)
-            return False, error_msg
-    except Exception as e:
-        error_msg = f"❌ Error installing `{package_name}`: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        bot.reply_to(message, error_msg)
-        save_install_log(message.from_user.id, module_name, package_name, "error", error_msg)
-        return False, error_msg
+            expiry = (datetime.utcnow() + timedelta(days=days)).isoformat()
+            await db.execute(
+                "INSERT INTO premium (user_id, expiry_date, is_lifetime, granted_by, granted_at) "
+                "VALUES (?, ?, 0, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+                "expiry_date=excluded.expiry_date, is_lifetime=0, granted_by=excluded.granted_by, granted_at=excluded.granted_at",
+                (user_id, expiry, admin_id, datetime.utcnow().isoformat()),
+            )
+        await db.commit()
 
-def attempt_install_npm(module_name, user_folder, message, manual_request=False):
-    """Install Node package via npm"""
-    try:
-        if manual_request:
-            bot.reply_to(message, f"🔄 Manual Node package installation requested for `{module_name}`...", parse_mode='Markdown')
-        else:
-            bot.reply_to(message, f"🟠 Node package `{module_name}` not found. Installing locally...", parse_mode='Markdown')
-        
-        command = ['npm', 'install', module_name]
-        logger.info(f"Running npm install: {' '.join(command)} in {user_folder}")
-        result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=user_folder, encoding='utf-8', errors='ignore')
-        
-        if result.returncode == 0:
-            log_msg = f"Installed {module_name}. Output:\n{result.stdout}"
-            logger.info(log_msg)
-            success_msg = f"✅ Node package `{module_name}` installed locally."
-            bot.reply_to(message, success_msg, parse_mode='Markdown')
-            save_install_log(message.from_user.id, module_name, module_name, "success", log_msg)
-            return True, log_msg
-        else:
-            error_msg = f"❌ Failed to install Node package `{module_name}`.\nLog:\n```\n{result.stderr or result.stdout}\n```"
-            logger.error(error_msg)
-            if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
-            bot.reply_to(message, error_msg, parse_mode='Markdown')
-            save_install_log(message.from_user.id, module_name, module_name, "failed", error_msg)
-            return False, error_msg
-    except FileNotFoundError:
-         error_msg = "❌ Error: 'npm' not found. Ensure Node.js/npm are installed and in PATH."
-         logger.error(error_msg)
-         bot.reply_to(message, error_msg)
-         save_install_log(message.from_user.id, module_name, module_name, "error", error_msg)
-         return False, error_msg
-    except Exception as e:
-        error_msg = f"❌ Error installing Node package `{module_name}`: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        bot.reply_to(message, error_msg)
-        save_install_log(message.from_user.id, module_name, module_name, "error", error_msg)
-        return False, error_msg
 
-def manual_install_module_init(message):
-    """Initialize manual module installation"""
-    user_id = message.from_user.id
-    
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-    
-    if bot_locked and user_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Bot locked by admin. Try later.")
-        return
-    
-    msg = bot.reply_to(message, "📦 Send module name to install (e.g., `requests` or `pillow`)\nFor Node.js: `npm:module_name`\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_manual_install_module)
+async def remove_premium(user_id: int) -> None:
+    async with db_conn() as db:
+        await db.execute("DELETE FROM premium WHERE user_id=?", (user_id,))
+        await db.commit()
 
-def process_manual_install_module(message):
-    """Process manual module installation"""
-    user_id = message.from_user.id
-    
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Installation cancelled.")
-        return
-    
-    module_name = message.text.strip()
-    
-    # Check if it's a Node.js module
-    if module_name.lower().startswith('npm:'):
-        module_name = module_name[4:].strip()
-        user_folder = get_user_folder(user_id)
-        success, log = attempt_install_npm(module_name, user_folder, message, manual_request=True)
-    else:
-        # Python module
-        success, log = attempt_install_pip(module_name, message, manual_request=True)
-    
-    if success:
-        logger.info(f"User {user_id} manually installed module: {module_name}")
 
-# --- Database Operations ---
-def save_user_file(user_id, file_name, file_type='py'):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('INSERT OR REPLACE INTO user_files (user_id, file_name, file_type) VALUES (?, ?, ?)',
-                      (user_id, file_name, file_type))
-            conn.commit()
-            if user_id not in user_files: user_files[user_id] = []
-            user_files[user_id] = [(fn, ft) for fn, ft in user_files[user_id] if fn != file_name]
-            user_files[user_id].append((file_name, file_type))
-            logger.info(f"Saved file '{file_name}' ({file_type}) for user {user_id}")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error saving file for user {user_id}, {file_name}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error saving file for {user_id}, {file_name}: {e}", exc_info=True)
-        finally: conn.close()
 
-def remove_user_file_db(user_id, file_name):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('DELETE FROM user_files WHERE user_id = ? AND file_name = ?', (user_id, file_name))
-            conn.commit()
-            if user_id in user_files:
-                user_files[user_id] = [f for f in user_files[user_id] if f[0] != file_name]
-                if not user_files[user_id]: del user_files[user_id]
-            logger.info(f"Removed file '{file_name}' for user {user_id} from DB")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing file for {user_id}, {file_name}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error removing file for {user_id}, {file_name}: {e}", exc_info=True)
-        finally: conn.close()
-
-def add_active_user(user_id):
-    active_users.add(user_id) 
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            join_date = datetime.now().isoformat()
-            c.execute('INSERT OR REPLACE INTO active_users (user_id, join_date, last_seen) VALUES (?, ?, ?)', 
-                      (user_id, join_date, join_date))
-            conn.commit()
-            logger.info(f"Added/Updated active user {user_id} in DB")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error adding active user {user_id}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error adding active user {user_id}: {e}", exc_info=True)
-        finally: conn.close()
-
-def save_subscription(user_id, expiry):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            expiry_str = expiry.isoformat()
-            c.execute('INSERT OR REPLACE INTO subscriptions (user_id, expiry) VALUES (?, ?)', (user_id, expiry_str))
-            conn.commit()
-            user_subscriptions[user_id] = {'expiry': expiry}
-            logger.info(f"Saved subscription for {user_id}, expiry {expiry_str}")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error saving subscription for {user_id}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error saving subscription for {user_id}: {e}", exc_info=True)
-        finally: conn.close()
-
-def remove_subscription_db(user_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            c.execute('DELETE FROM subscriptions WHERE user_id = ?', (user_id,))
-            conn.commit()
-            if user_id in user_subscriptions: del user_subscriptions[user_id]
-            logger.info(f"Removed subscription for {user_id} from DB")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing subscription for {user_id}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error removing subscription for {user_id}: {e}", exc_info=True)
-        finally: conn.close()
-
-def add_admin_db(admin_id, added_by):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        try:
-            added_date = datetime.now().isoformat()
-            c.execute('INSERT OR IGNORE INTO admins (user_id, added_by, added_date) VALUES (?, ?, ?)', 
-                      (admin_id, added_by, added_date))
-            conn.commit()
-            admin_ids.add(admin_id) 
-            logger.info(f"Added admin {admin_id} to DB by {added_by}")
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error adding admin {admin_id}: {e}")
-        except Exception as e: logger.error(f"❌ Unexpected error adding admin {admin_id}: {e}", exc_info=True)
-        finally: conn.close()
-
-def remove_admin_db(admin_id):
-    if admin_id == OWNER_ID:
-        logger.warning("Attempted to remove OWNER_ID from admins.")
-        return False 
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-        c = conn.cursor()
-        removed = False
-        try:
-            c.execute('SELECT 1 FROM admins WHERE user_id = ?', (admin_id,))
-            if c.fetchone():
-                c.execute('DELETE FROM admins WHERE user_id = ?', (admin_id,))
-                conn.commit()
-                removed = c.rowcount > 0 
-                if removed: admin_ids.discard(admin_id); logger.info(f"Removed admin {admin_id} from DB")
-                else: logger.warning(f"Admin {admin_id} found but delete affected 0 rows.")
-            else:
-                logger.warning(f"Admin {admin_id} not found in DB.")
-                admin_ids.discard(admin_id)
-            return removed
-        except sqlite3.Error as e: logger.error(f"❌ SQLite error removing admin {admin_id}: {e}"); return False
-        except Exception as e: logger.error(f"❌ Unexpected error removing admin {admin_id}: {e}", exc_info=True); return False
-        finally: conn.close()
-
-# --- Menu creation (Inline and ReplyKeyboards) ---
-def create_main_menu_inline(user_id):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        types.InlineKeyboardButton('📢 Updates Channel', url=f'https://t.me/{UPDATE_CHANNEL.replace("@", "")}'),
-        types.InlineKeyboardButton('📤 Upload File', callback_data='upload'),
-        types.InlineKeyboardButton('📂 Check Files', callback_data='check_files'),
-        types.InlineKeyboardButton('⚡ Bot Speed', callback_data='speed'),
-        types.InlineKeyboardButton('📦 Manual Install', callback_data='manual_install'),
-        types.InlineKeyboardButton('📞 Contact Owner', url=f'https://t.me/{YOUR_USERNAME.replace("@", "")}')
+def user_reply_keyboard(admin: bool) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton("📁 Buy Files", style="primary"), KeyboardButton("💎 My Wallet", style="primary")],
+        [KeyboardButton("🎁 Daily Bonus", style="primary"), KeyboardButton("🎰 Daily Spin", style="success")],
+        [KeyboardButton("🎁 Mystery Box", style="success"), KeyboardButton("🚀 Invite Friends", style="primary")],
+        [KeyboardButton("🎟️ Redeem Code", style="primary"), KeyboardButton("📊 My Stats", style="primary")],
+        [KeyboardButton("🏆 Leaderboard", style="primary"), KeyboardButton("🎫 Support Ticket", style="primary")],
+        [KeyboardButton("💬 Support", style="primary")],
     ]
+    if admin:
+        rows.append([KeyboardButton("👑 Admin Panel", style="primary")])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-    if user_id in admin_ids:
-        admin_buttons = [
-            types.InlineKeyboardButton('💳 Subscriptions', callback_data='subscription'),
-            types.InlineKeyboardButton('📊 Statistics', callback_data='stats'),
-            types.InlineKeyboardButton('🔒 Lock Bot' if not bot_locked else '🔓 Unlock Bot',
-                                     callback_data='lock_bot' if not bot_locked else 'unlock_bot'),
-            types.InlineKeyboardButton('📢 Broadcast', callback_data='broadcast'),
-            types.InlineKeyboardButton('👑 Admin Panel', callback_data='admin_panel'),
-            types.InlineKeyboardButton('🟢 Run All Scripts', callback_data='run_all_scripts'),
-            types.InlineKeyboardButton('📢 Channel Add', callback_data='manage_mandatory_channels'),
-            types.InlineKeyboardButton('👥 User Management', callback_data='user_management'),
-            types.InlineKeyboardButton('🛠️ Admin Install', callback_data='admin_install'),
-            types.InlineKeyboardButton('⚙️ Settings', callback_data='admin_settings')
-        ]
-        markup.add(buttons[0])
-        markup.add(buttons[1], buttons[2])
-        markup.add(buttons[3], admin_buttons[0])
-        markup.add(admin_buttons[1], admin_buttons[3])
-        markup.add(admin_buttons[2], admin_buttons[5])
-        markup.add(admin_buttons[6], admin_buttons[8])
-        markup.add(admin_buttons[7], admin_buttons[9])
-        markup.add(admin_buttons[4])
-        markup.add(buttons[5])
-    else:
-        markup.add(buttons[0])
-        markup.add(buttons[1], buttons[2])
-        markup.add(buttons[3], buttons[4])
-        markup.add(types.InlineKeyboardButton('📊 Statistics', callback_data='stats'))
-        markup.add(buttons[5])
-    return markup
 
-def create_reply_keyboard_main_menu(user_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    layout_to_use = ADMIN_COMMAND_BUTTONS_LAYOUT_USER_SPEC if user_id in admin_ids else COMMAND_BUTTONS_LAYOUT_USER_SPEC
-    for row_buttons_text in layout_to_use:
-        markup.add(*[types.KeyboardButton(text) for text in row_buttons_text])
-    return markup
+def admin_reply_keyboard(is_owner: bool = True) -> ReplyKeyboardMarkup:
+    """Full admin control keyboard — replaces the user keyboard entirely while
+    the admin is inside the Admin Panel. Senior/Junior admins get a reduced
+    set — Force Channels and Settings are Owner-only sections. Requires
+    python-telegram-bot >= 22.7 (Bot API 9.4+) for `style` to render as
+    colored buttons in Telegram; see requirements.txt."""
+    admin_mgr_label = "🛡 Admin Manager" if is_owner else "📋 Admin List"
+    buttons = ["📤 Upload File", "📂 Manage Files", "💰 Wallet Manager", "🎟 Redeem Manager"]
+    if is_owner:
+        buttons += ["📡 Force Channels"]
+    buttons += ["📢 Broadcast", "👥 User Manager", "👤 All Users", "👑 Premium Manager", "📊 Statistics", "🛠 Maintenance"]
+    if is_owner:
+        buttons += ["⚙ Settings"]
+    buttons += [admin_mgr_label]
 
-def create_control_buttons(script_owner_id, file_name, is_running=True):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    if is_running:
-        markup.row(
-            types.InlineKeyboardButton("🔴 Stop", callback_data=f'stop_{script_owner_id}_{file_name}'),
-            types.InlineKeyboardButton("🔄 Restart", callback_data=f'restart_{script_owner_id}_{file_name}')
+    rows = [
+        [KeyboardButton(buttons[i], style="primary")] + (
+            [KeyboardButton(buttons[i + 1], style="primary")] if i + 1 < len(buttons) else []
         )
-        markup.row(
-            types.InlineKeyboardButton("🗑️ Delete", callback_data=f'delete_{script_owner_id}_{file_name}'),
-            types.InlineKeyboardButton("📜 Logs", callback_data=f'logs_{script_owner_id}_{file_name}')
-        )
-    else:
-        markup.row(
-            types.InlineKeyboardButton("🟢 Start", callback_data=f'start_{script_owner_id}_{file_name}'),
-            types.InlineKeyboardButton("🗑️ Delete", callback_data=f'delete_{script_owner_id}_{file_name}')
-        )
-        markup.row(
-            types.InlineKeyboardButton("📜 View Logs", callback_data=f'logs_{script_owner_id}_{file_name}')
-        )
-    markup.add(types.InlineKeyboardButton("🔙 Back to Files", callback_data='check_files'))
-    return markup
+        for i in range(0, len(buttons), 2)
+    ]
+    rows.append([KeyboardButton("⬅️ Back to Main", style="primary")])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-def create_admin_panel():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('➕ Add Admin', callback_data='add_admin'),
-        types.InlineKeyboardButton('➖ Remove Admin', callback_data='remove_admin')
-    )
-    markup.row(types.InlineKeyboardButton('📋 List Admins', callback_data='list_admins'))
-    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
-    return markup
 
-def create_user_management_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('🚫 Ban User', callback_data='ban_user'),
-        types.InlineKeyboardButton('✅ Unban User', callback_data='unban_user')
-    )
-    markup.row(
-        types.InlineKeyboardButton('📊 User Info', callback_data='user_info'),
-        types.InlineKeyboardButton('👥 All Users', callback_data='all_users')
-    )
-    markup.row(
-        types.InlineKeyboardButton('🔧 Set User Limit', callback_data='set_user_limit'),
-        types.InlineKeyboardButton('🗑️ Remove User Limit', callback_data='remove_user_limit')
-    )
-    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
-    return markup
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("📤 Upload File", callback_data="ad:upload", style="primary"),
+         InlineKeyboardButton("📂 Manage Files", callback_data="ad:managefiles", style="primary")],
+        [InlineKeyboardButton("💰 Wallet Manager", callback_data="ad:walletmgr", style="primary"),
+         InlineKeyboardButton("🎟 Redeem Manager", callback_data="ad:redeemmgr", style="primary")],
+        [InlineKeyboardButton("📡 Force Channels", callback_data="ad:fcmgr", style="primary"),
+         InlineKeyboardButton("📢 Broadcast", callback_data="ad:broadcast", style="primary")],
+        [InlineKeyboardButton("👥 User Manager", callback_data="ad:usermgr", style="primary"),
+         InlineKeyboardButton("👑 Premium Manager", callback_data="ad:premiummgr", style="primary")],
+        [InlineKeyboardButton("📊 Statistics", callback_data="ad:stats", style="primary"),
+         InlineKeyboardButton("🛠 Maintenance", callback_data="ad:maintenance", style="primary")],
+        [InlineKeyboardButton("⚙ Settings", callback_data="ad:settings", style="primary"),
+         InlineKeyboardButton("🛡 Admin Manager", callback_data="ad:adminmgr", style="primary")],
+    ]
+    return InlineKeyboardMarkup(rows)
 
-def create_subscription_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('➕ Add Subscription', callback_data='add_subscription'),
-        types.InlineKeyboardButton('➖ Remove Subscription', callback_data='remove_subscription')
-    )
-    markup.row(types.InlineKeyboardButton('🔍 Check Subscription', callback_data='check_subscription'))
-    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
-    return markup
 
-def create_admin_settings_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton('📊 System Info', callback_data='system_info'),
-        types.InlineKeyboardButton('📈 Bot Performance', callback_data='bot_performance')
-    )
-    markup.row(
-        types.InlineKeyboardButton('🧹 Cleanup Files', callback_data='cleanup_files'),
-        types.InlineKeyboardButton('📋 Installation Logs', callback_data='install_logs')
-    )
-    markup.row(types.InlineKeyboardButton('🔙 Back to Main', callback_data='back_to_main'))
-    return markup
+def back_button(cb: str = "ad:home") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data=cb, style="primary")]])
 
-# --- File Handling ---
-def handle_zip_file(downloaded_file_content, file_name_zip, message):
-    user_id = message.from_user.id
-    user_folder = get_user_folder(user_id)
-    temp_dir = None 
-    try:
-        temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_")
-        logger.info(f"Temp dir for zip: {temp_dir}")
-        zip_path = os.path.join(temp_dir, file_name_zip)
-        with open(zip_path, 'wb') as new_file: new_file.write(downloaded_file_content)
-        
-        # Security check for ZIP
-        is_safe, security_msg = scan_zip_security(zip_path)
-        if not is_safe:
-            # Send security warning to admin for approval
-            security_warning_msg = f"🚨 File needs approval:\n👤 User: {user_id}\n📁 File: {file_name_zip}\n⚠️ Reason: {security_msg}"
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("✅ Approve", callback_data=f"approve_zip_{user_id}_{file_name_zip}"),
-                types.InlineKeyboardButton("❌ Reject", callback_data=f"reject_zip_{user_id}_{file_name_zip}")
-            )
-            for admin_id in admin_ids:
-                try:
-                    bot.send_message(admin_id, security_warning_msg, reply_markup=markup)
-                except Exception as e:
-                    logger.error(f"Failed to send security warning to admin {admin_id}: {e}")
-            
-            # Store the file content for later approval
-            if user_id not in pending_zip_files:
-                pending_zip_files[user_id] = {}
-            pending_zip_files[user_id][file_name_zip] = downloaded_file_content
-            
-            bot.reply_to(message, f"⏳ File under security review. You will be notified upon approval.")
-            return
 
-        # Process ZIP file if safe
-        process_zip_file(zip_path, user_id, user_folder, file_name_zip, message, temp_dir)
-        
-    except zipfile.BadZipFile as e:
-        logger.error(f"Bad zip file from {user_id}: {e}")
-        bot.reply_to(message, f"❌ Error: Invalid/corrupted ZIP. {e}")
-    except Exception as e:
-        logger.error(f"❌ Error processing zip for {user_id}: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error processing zip: {str(e)}")
-    finally:
-        if temp_dir and os.path.exists(temp_dir):
-            try: shutil.rmtree(temp_dir); logger.info(f"Cleaned temp dir: {temp_dir}")
-            except Exception as e: logger.error(f"Failed to clean temp dir {temp_dir}: {e}", exc_info=True)
 
-def process_zip_file(zip_path, user_id, user_folder, file_name_zip, message, temp_dir=None):
-    """Process ZIP file extraction and setup"""
-    cleanup_temp = False
-    if temp_dir is None:
-        temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_")
-        cleanup_temp = True
-        
-    try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            # Check for safe paths
-            for member in zip_ref.infolist():
-                member_path = os.path.abspath(os.path.join(temp_dir, member.filename))
-                if not member_path.startswith(os.path.abspath(temp_dir)):
-                    raise zipfile.BadZipFile(f"Zip has unsafe path: {member.filename}")
-            zip_ref.extractall(temp_dir)
-            logger.info(f"Extracted zip to {temp_dir}")
+async def list_force_channels():
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM force_channels ORDER BY id")
+        return await cur.fetchall()
 
-        extracted_items = os.listdir(temp_dir)
-        py_files = [f for f in extracted_items if f.endswith('.py')]
-        js_files = [f for f in extracted_items if f.endswith('.js')]
-        req_file = 'requirements.txt' if 'requirements.txt' in extracted_items else None
-        pkg_json = 'package.json' if 'package.json' in extracted_items else None
 
-        if req_file:
-            req_path = os.path.join(temp_dir, req_file)
-            logger.info(f"requirements.txt found, installing: {req_path}")
-            bot.reply_to(message, f"🔄 Installing Python deps from `{req_file}`...")
-            try:
-                command = [sys.executable, '-m', 'pip', 'install', '-r', req_path]
-                result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore')
-                logger.info(f"pip install from requirements.txt OK. Output:\n{result.stdout}")
-                bot.reply_to(message, f"✅ Python deps from `{req_file}` installed.")
-            except subprocess.CalledProcessError as e:
-                error_msg = f"❌ Failed to install Python deps from `{req_file}`.\nLog:\n```\n{e.stderr or e.stdout}\n```"
-                logger.error(error_msg)
-                if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
-                bot.reply_to(message, error_msg, parse_mode='Markdown'); return
-            except Exception as e:
-                 error_msg = f"❌ Unexpected error installing Python deps: {e}"
-                 logger.error(error_msg, exc_info=True); bot.reply_to(message, error_msg); return
-
-        if pkg_json:
-            logger.info(f"package.json found, npm install in: {temp_dir}")
-            bot.reply_to(message, f"🔄 Installing Node deps from `{pkg_json}`...")
-            try:
-                command = ['npm', 'install']
-                result = subprocess.run(command, capture_output=True, text=True, check=True, cwd=temp_dir, encoding='utf-8', errors='ignore')
-                logger.info(f"npm install OK. Output:\n{result.stdout}")
-                bot.reply_to(message, f"✅ Node deps from `{pkg_json}` installed.")
-            except FileNotFoundError:
-                bot.reply_to(message, "❌ 'npm' not found. Cannot install Node deps."); return 
-            except subprocess.CalledProcessError as e:
-                error_msg = f"❌ Failed to install Node deps from `{pkg_json}`.\nLog:\n```\n{e.stderr or e.stdout}\n```"
-                logger.error(error_msg)
-                if len(error_msg) > 4000: error_msg = error_msg[:4000] + "\n... (Log truncated)"
-                bot.reply_to(message, error_msg, parse_mode='Markdown'); return
-            except Exception as e:
-                 error_msg = f"❌ Unexpected error installing Node deps: {e}"
-                 logger.error(error_msg, exc_info=True); bot.reply_to(message, error_msg); return
-
-        main_script_name = None; file_type = None
-        preferred_py = ['main.py', 'bot.py', 'app.py']; preferred_js = ['index.js', 'main.js', 'bot.js', 'app.js']
-        for p in preferred_py:
-            if p in py_files: main_script_name = p; file_type = 'py'; break
-        if not main_script_name:
-             for p in preferred_js:
-                 if p in js_files: main_script_name = p; file_type = 'js'; break
-        if not main_script_name:
-            if py_files: main_script_name = py_files[0]; file_type = 'py'
-            elif js_files: main_script_name = js_files[0]; file_type = 'js'
-        if not main_script_name:
-            bot.reply_to(message, "❌ No `.py` or `.js` script found in archive!"); return
-
-        logger.info(f"Moving extracted files from {temp_dir} to {user_folder}")
-        moved_count = 0
-        for item_name in os.listdir(temp_dir):
-            src_path = os.path.join(temp_dir, item_name)
-            dest_path = os.path.join(user_folder, item_name)
-            if os.path.isdir(dest_path): shutil.rmtree(dest_path)
-            elif os.path.exists(dest_path): os.remove(dest_path)
-            shutil.move(src_path, dest_path); moved_count +=1
-        logger.info(f"Moved {moved_count} items to {user_folder}")
-
-        save_user_file(user_id, main_script_name, file_type)
-        logger.info(f"Saved main script '{main_script_name}' ({file_type}) for {user_id} from zip.")
-        main_script_path = os.path.join(user_folder, main_script_name)
-        bot.reply_to(message, f"✅ Files extracted. Starting main script: `{main_script_name}`...", parse_mode='Markdown')
-
-        # Use user_id as script_owner_id for script key context
-        if file_type == 'py':
-             threading.Thread(target=run_script, args=(main_script_path, user_id, user_folder, main_script_name, message)).start()
-        elif file_type == 'js':
-             threading.Thread(target=run_js_script, args=(main_script_path, user_id, user_folder, main_script_name, message)).start()
-             
-    except Exception as e:
-        logger.error(f"Error processing zip file: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error processing zip: {str(e)}")
-    finally:
-        if cleanup_temp and temp_dir and os.path.exists(temp_dir):
-            try: shutil.rmtree(temp_dir); logger.info(f"Cleaned temp dir: {temp_dir}")
-            except Exception as e: logger.error(f"Failed to clean temp dir {temp_dir}: {e}", exc_info=True)
-
-def handle_js_file(file_path, script_owner_id, user_folder, file_name, message):
-    try:
-        save_user_file(script_owner_id, file_name, 'js')
-        threading.Thread(target=run_js_script, args=(file_path, script_owner_id, user_folder, file_name, message)).start()
-    except Exception as e:
-        logger.error(f"❌ Error processing JS file {file_name} for {script_owner_id}: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error processing JS file: {str(e)}")
-
-def handle_py_file(file_path, script_owner_id, user_folder, file_name, message):
-    try:
-        save_user_file(script_owner_id, file_name, 'py')
-        threading.Thread(target=run_script, args=(file_path, script_owner_id, user_folder, file_name, message)).start()
-    except Exception as e:
-        logger.error(f"❌ Error processing Python file {file_name} for {script_owner_id}: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error processing Python file: {str(e)}")
-
-# --- Automatic Package Installation & Script Running ---
-def run_script(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt=1):
-    """Run Python script. script_owner_id is used for the script_key. message_obj_for_reply is for sending feedback."""
-    max_attempts = 2 
-    if attempt > max_attempts:
-        bot.reply_to(message_obj_for_reply, f"❌ Failed to run '{file_name}' after {max_attempts} attempts. Check logs.")
-        return
-
-    script_key = f"{script_owner_id}_{file_name}"
-    logger.info(f"Attempt {attempt} to run Python script: {script_path} (Key: {script_key}) for user {script_owner_id}")
-
-    try:
-        if not os.path.exists(script_path):
-             bot.reply_to(message_obj_for_reply, f"❌ Error: Script '{file_name}' not found at '{script_path}'!")
-             logger.error(f"Script not found: {script_path} for user {script_owner_id}")
-             if script_owner_id in user_files:
-                 user_files[script_owner_id] = [f for f in user_files.get(script_owner_id, []) if f[0] != file_name]
-             remove_user_file_db(script_owner_id, file_name)
-             return
-
-        if attempt == 1:
-            check_command = [sys.executable, script_path]
-            logger.info(f"Running Python pre-check: {' '.join(check_command)}")
-            check_proc = None
-            try:
-                check_proc = subprocess.Popen(check_command, cwd=user_folder, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
-                stdout, stderr = check_proc.communicate(timeout=5)
-                return_code = check_proc.returncode
-                logger.info(f"Python Pre-check early. RC: {return_code}. Stderr: {stderr[:200]}...")
-                if return_code != 0 and stderr:
-                    match_py = re.search(r"ModuleNotFoundError: No module named '(.+?)'", stderr)
-                    if match_py:
-                        module_name = match_py.group(1).strip().strip("'\"")
-                        logger.info(f"Detected missing Python module: {module_name}")
-                        success, _ = attempt_install_pip(module_name, message_obj_for_reply)
-                        if success:
-                            logger.info(f"Install OK for {module_name}. Retrying run_script...")
-                            bot.reply_to(message_obj_for_reply, f"🔄 Install successful. Retrying '{file_name}'...")
-                            time.sleep(2)
-                            threading.Thread(target=run_script, args=(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt + 1)).start()
-                            return
-                        else:
-                            bot.reply_to(message_obj_for_reply, f"❌ Install failed. Cannot run '{file_name}'.")
-                            return
-                    else:
-                         error_summary = stderr[:500]
-                         bot.reply_to(message_obj_for_reply, f"❌ Error in script pre-check for '{file_name}':\n```\n{error_summary}\n```\nFix the script.", parse_mode='Markdown')
-                         return
-            except subprocess.TimeoutExpired:
-                logger.info("Python Pre-check timed out (>5s), imports likely OK. Killing check process.")
-                if check_proc and check_proc.poll() is None: check_proc.kill(); check_proc.communicate()
-                logger.info("Python Check process killed. Proceeding to long run.")
-            except FileNotFoundError:
-                 logger.error(f"Python interpreter not found: {sys.executable}")
-                 bot.reply_to(message_obj_for_reply, f"❌ Error: Python interpreter '{sys.executable}' not found.")
-                 return
-            except Exception as e:
-                 logger.error(f"Error in Python pre-check for {script_key}: {e}", exc_info=True)
-                 bot.reply_to(message_obj_for_reply, f"❌ Unexpected error in script pre-check for '{file_name}': {e}")
-                 return
-            finally:
-                 if check_proc and check_proc.poll() is None:
-                     logger.warning(f"Python Check process {check_proc.pid} still running. Killing.")
-                     check_proc.kill(); check_proc.communicate()
-
-        logger.info(f"Starting long-running Python process for {script_key}")
-        log_file_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
-        log_file = None; process = None
-        try: log_file = open(log_file_path, 'w', encoding='utf-8', errors='ignore')
-        except Exception as e:
-             logger.error(f"Failed to open log file '{log_file_path}' for {script_key}: {e}", exc_info=True)
-             bot.reply_to(message_obj_for_reply, f"❌ Failed to open log file '{log_file_path}': {e}")
-             return
+async def check_force_join(bot, user_id: int) -> list[dict]:
+    """Returns list of channels the user has NOT joined."""
+    if (await get_setting("force_join", "1")) != "1":
+        return []
+    channels = await list_force_channels()
+    missing = []
+    for ch in channels:
         try:
-            startupinfo = None; creationflags = 0
-            if os.name == 'nt':
-                 startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                 startupinfo.wShowWindow = subprocess.SW_HIDE
-            process = subprocess.Popen(
-                [sys.executable, script_path], cwd=user_folder, stdout=log_file, stderr=log_file,
-                stdin=subprocess.PIPE, startupinfo=startupinfo, creationflags=creationflags,
-                encoding='utf-8', errors='ignore'
-            )
-            logger.info(f"Started Python process {process.pid} for {script_key}")
-            bot_scripts[script_key] = {
-                'process': process, 'log_file': log_file, 'file_name': file_name,
-                'chat_id': message_obj_for_reply.chat.id,
-                'script_owner_id': script_owner_id,
-                'start_time': datetime.now(), 'user_folder': user_folder, 'type': 'py', 'script_key': script_key
-            }
-            bot.reply_to(message_obj_for_reply, f"✅ Python script '{file_name}' started! (PID: {process.pid}) (For User: {script_owner_id})")
-        except FileNotFoundError:
-             logger.error(f"Python interpreter {sys.executable} not found for long run {script_key}")
-             bot.reply_to(message_obj_for_reply, f"❌ Error: Python interpreter '{sys.executable}' not found.")
-             if log_file and not log_file.closed: log_file.close()
-             if script_key in bot_scripts: del bot_scripts[script_key]
-        except Exception as e:
-            if log_file and not log_file.closed: log_file.close()
-            error_msg = f"❌ Error starting Python script '{file_name}': {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            bot.reply_to(message_obj_for_reply, error_msg)
-            if process and process.poll() is None:
-                 logger.warning(f"Killing potentially started Python process {process.pid} for {script_key}")
-                 kill_process_tree({'process': process, 'log_file': log_file, 'script_key': script_key})
-            if script_key in bot_scripts: del bot_scripts[script_key]
-    except Exception as e:
-        error_msg = f"❌ Unexpected error running Python script '{file_name}': {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        bot.reply_to(message_obj_for_reply, error_msg)
-        if script_key in bot_scripts:
-             logger.warning(f"Cleaning up {script_key} due to error in run_script.")
-             kill_process_tree(bot_scripts[script_key])
-             del bot_scripts[script_key]
+            member = await bot.get_chat_member(chat_id=ch["chat_id"], user_id=user_id)
+            if member.status in ("left", "kicked"):
+                missing.append(dict(ch))
+        except TelegramError:
+            missing.append(dict(ch))
+    return missing
 
-def run_js_script(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt=1):
-    """Run JS script. script_owner_id is used for the script_key. message_obj_for_reply is for sending feedback."""
-    max_attempts = 2
-    if attempt > max_attempts:
-        bot.reply_to(message_obj_for_reply, f"❌ Failed to run '{file_name}' after {max_attempts} attempts. Check logs.")
-        return
 
-    script_key = f"{script_owner_id}_{file_name}"
-    logger.info(f"Attempt {attempt} to run JS script: {script_path} (Key: {script_key}) for user {script_owner_id}")
-
-    try:
-        if not os.path.exists(script_path):
-             bot.reply_to(message_obj_for_reply, f"❌ Error: Script '{file_name}' not found at '{script_path}'!")
-             logger.error(f"JS Script not found: {script_path} for user {script_owner_id}")
-             if script_owner_id in user_files:
-                 user_files[script_owner_id] = [f for f in user_files.get(script_owner_id, []) if f[0] != file_name]
-             remove_user_file_db(script_owner_id, file_name)
-             return
-
-        if attempt == 1:
-            check_command = ['node', script_path]
-            logger.info(f"Running JS pre-check: {' '.join(check_command)}")
-            check_proc = None
-            try:
-                check_proc = subprocess.Popen(check_command, cwd=user_folder, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
-                stdout, stderr = check_proc.communicate(timeout=5)
-                return_code = check_proc.returncode
-                logger.info(f"JS Pre-check early. RC: {return_code}. Stderr: {stderr[:200]}...")
-                if return_code != 0 and stderr:
-                    match_js = re.search(r"Cannot find module '(.+?)'", stderr)
-                    if match_js:
-                        module_name = match_js.group(1).strip().strip("'\"")
-                        if not module_name.startswith('.') and not module_name.startswith('/'):
-                             logger.info(f"Detected missing Node module: {module_name}")
-                             success, _ = attempt_install_npm(module_name, user_folder, message_obj_for_reply)
-                             if success:
-                                 logger.info(f"NPM Install OK for {module_name}. Retrying run_js_script...")
-                                 bot.reply_to(message_obj_for_reply, f"🔄 NPM Install successful. Retrying '{file_name}'...")
-                                 time.sleep(2)
-                                 threading.Thread(target=run_js_script, args=(script_path, script_owner_id, user_folder, file_name, message_obj_for_reply, attempt + 1)).start()
-                                 return
-                             else:
-                                 bot.reply_to(message_obj_for_reply, f"❌ NPM Install failed. Cannot run '{file_name}'.")
-                                 return
-                        else: logger.info(f"Skipping npm install for relative/core: {module_name}")
-                    error_summary = stderr[:500]
-                    bot.reply_to(message_obj_for_reply, f"❌ Error in JS script pre-check for '{file_name}':\n```\n{error_summary}\n```\nFix script or install manually.", parse_mode='Markdown')
-                    return
-            except subprocess.TimeoutExpired:
-                logger.info("JS Pre-check timed out (>5s), imports likely OK. Killing check process.")
-                if check_proc and check_proc.poll() is None: check_proc.kill(); check_proc.communicate()
-                logger.info("JS Check process killed. Proceeding to long run.")
-            except FileNotFoundError:
-                 error_msg = "❌ Error: 'node' not found. Ensure Node.js is installed for JS files."
-                 logger.error(error_msg)
-                 bot.reply_to(message_obj_for_reply, error_msg)
-                 return
-            except Exception as e:
-                 logger.error(f"Error in JS pre-check for {script_key}: {e}", exc_info=True)
-                 bot.reply_to(message_obj_for_reply, f"❌ Unexpected error in JS pre-check for '{file_name}': {e}")
-                 return
-            finally:
-                 if check_proc and check_proc.poll() is None:
-                     logger.warning(f"JS Check process {check_proc.pid} still running. Killing.")
-                     check_proc.kill(); check_proc.communicate()
-
-        logger.info(f"Starting long-running JS process for {script_key}")
-        log_file_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
-        log_file = None; process = None
-        try: log_file = open(log_file_path, 'w', encoding='utf-8', errors='ignore')
-        except Exception as e:
-            logger.error(f"Failed to open log file '{log_file_path}' for JS script {script_key}: {e}", exc_info=True)
-            bot.reply_to(message_obj_for_reply, f"❌ Failed to open log file '{log_file_path}': {e}")
-            return
-        try:
-            startupinfo = None; creationflags = 0
-            if os.name == 'nt':
-                 startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                 startupinfo.wShowWindow = subprocess.SW_HIDE
-            process = subprocess.Popen(
-                ['node', script_path], cwd=user_folder, stdout=log_file, stderr=log_file,
-                stdin=subprocess.PIPE, startupinfo=startupinfo, creationflags=creationflags,
-                encoding='utf-8', errors='ignore'
-            )
-            logger.info(f"Started JS process {process.pid} for {script_key}")
-            bot_scripts[script_key] = {
-                'process': process, 'log_file': log_file, 'file_name': file_name,
-                'chat_id': message_obj_for_reply.chat.id,
-                'script_owner_id': script_owner_id,
-                'start_time': datetime.now(), 'user_folder': user_folder, 'type': 'js', 'script_key': script_key
-            }
-            bot.reply_to(message_obj_for_reply, f"✅ JS script '{file_name}' started! (PID: {process.pid}) (For User: {script_owner_id})")
-        except FileNotFoundError:
-             error_msg = "❌ Error: 'node' not found for long run. Ensure Node.js is installed."
-             logger.error(error_msg)
-             if log_file and not log_file.closed: log_file.close()
-             bot.reply_to(message_obj_for_reply, error_msg)
-             if script_key in bot_scripts: del bot_scripts[script_key]
-        except Exception as e:
-            if log_file and not log_file.closed: log_file.close()
-            error_msg = f"❌ Error starting JS script '{file_name}': {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            bot.reply_to(message_obj_for_reply, error_msg)
-            if process and process.poll() is None:
-                 logger.warning(f"Killing potentially started JS process {process.pid} for {script_key}")
-                 kill_process_tree({'process': process, 'log_file': log_file, 'script_key': script_key})
-            if script_key in bot_scripts: del bot_scripts[script_key]
-    except Exception as e:
-        error_msg = f"❌ Unexpected error running JS script '{file_name}': {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        bot.reply_to(message_obj_for_reply, error_msg)
-        if script_key in bot_scripts:
-             logger.warning(f"Cleaning up {script_key} due to error in run_js_script.")
-             kill_process_tree(bot_scripts[script_key])
-             del bot_scripts[script_key]
-
-# --- Logic Functions (called by commands and text handlers) ---
-def _logic_send_welcome(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    user_name = message.from_user.first_name
-
-    logger.info(f"Welcome request from user_id: {user_id}")
-
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.send_message(chat_id, "❌ You are banned from using this bot.")
-        return
-
-    # Check mandatory subscription FIRST - before anything else
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.send_message(chat_id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-
-    if bot_locked and user_id not in admin_ids:
-        bot.send_message(chat_id, "⚠️ Bot locked by admin. Try later.")
-        return
-
-    if user_id not in active_users:
-        add_active_user(user_id)
-        try:
-            owner_notification = (f"🎉 New user!\n👤 Name: {user_name}\n🆔 ID: `{user_id}`")
-            bot.send_message(OWNER_ID, owner_notification, parse_mode='Markdown')
-        except Exception as e: 
-            logger.error(f"⚠️ Failed to notify owner about new user {user_id}: {e}")
-
-    file_limit = get_user_file_limit(user_id)
-    current_files = get_user_file_count(user_id)
-    limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
-    expiry_info = ""
-    
-    if user_id == OWNER_ID: 
-        user_status = "👑 Owner"
-    elif user_id in admin_ids: 
-        user_status = "🛡️ Admin"
-    elif user_id in user_subscriptions:
-        expiry_date = user_subscriptions[user_id].get('expiry')
-        if expiry_date and expiry_date > datetime.now():
-            user_status = "⭐ Premium"
-            days_left = (expiry_date - datetime.now()).days
-            expiry_info = f"\n⏳ Subscription expires in: {days_left} days"
-        else: 
-            user_status = "🆓 Free User (Expired Sub)"
-            remove_subscription_db(user_id)
-    else: 
-        user_status = "🆓 Free User"
-
-    welcome_msg_text = (f"〽️ Welcome, {user_name}!\n\n🆔 Your User ID: `{user_id}`\n"
-                        f"🔰 Your Status: {user_status}{expiry_info}\n"
-                        f"📁 Files Uploaded: {current_files} / {limit_str}\n\n"
-                        f"🤖 Host & run Python (`.py`) or JS (`.js`) scripts.\n"
-                        f"   Upload single scripts or `.zip` archives.\n"
-                        f"📦 Manual module installation available\n\n"
-                        f"👇 Use buttons or type commands.")
-    
-    main_reply_markup = create_reply_keyboard_main_menu(user_id)
-    try:
-        bot.send_message(chat_id, welcome_msg_text, reply_markup=main_reply_markup, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error sending welcome to {user_id}: {e}", exc_info=True)
-
-def _logic_updates_channel(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton('📢 Updates Channel', url=f'https://t.me/{UPDATE_CHANNEL.replace("@", "")}'))
-    bot.reply_to(message, "Visit our Updates Channel:", reply_markup=markup)
-
-def _logic_upload_file(message):
-    user_id = message.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    if bot_locked and user_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Bot locked by admin, cannot accept files.")
-        return
-
-    file_limit = get_user_file_limit(user_id)
-    current_files = get_user_file_count(user_id)
-    if current_files >= file_limit:
-        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
-        bot.reply_to(message, f"⚠️ File limit ({current_files}/{limit_str}) reached. Delete files first.")
-        return
-    bot.reply_to(message, "📤 Send your Python (`.py`), JS (`.js`), or ZIP (`.zip`) file.")
-
-def _logic_check_files(message):
-    user_id = message.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    user_files_list = user_files.get(user_id, [])
-    if not user_files_list:
-        bot.reply_to(message, "📂 Your files:\n\n(No files uploaded yet)")
-        return
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for file_name, file_type in sorted(user_files_list):
-        is_running = is_bot_running(user_id, file_name)
-        status_icon = "🟢 Running" if is_running else "🔴 Stopped"
-        btn_text = f"{file_name} ({file_type}) - {status_icon}"
-        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'file_{user_id}_{file_name}'))
-    bot.reply_to(message, "📂 Your files:\nClick to manage.", reply_markup=markup, parse_mode='Markdown')
-
-def _logic_bot_speed(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    start_time_ping = time.time()
-    wait_msg = bot.reply_to(message, "🏃 Testing speed...")
-    try:
-        bot.send_chat_action(chat_id, 'typing')
-        response_time = round((time.time() - start_time_ping) * 1000, 2)
-        status = "🔓 Unlocked" if not bot_locked else "🔒 Locked"
-        if user_id == OWNER_ID: user_level = "👑 Owner"
-        elif user_id in admin_ids: user_level = "🛡️ Admin"
-        elif user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now(): user_level = "⭐ Premium"
-        else: user_level = "🆓 Free User"
-        speed_msg = (f"⚡ Bot Speed & Status:\n\n⏱️ API Response Time: {response_time} ms\n"
-                     f"🚦 Bot Status: {status}\n"
-                     f"👤 Your Level: {user_level}")
-        bot.edit_message_text(speed_msg, chat_id, wait_msg.message_id)
-    except Exception as e:
-        logger.error(f"Error during speed test (cmd): {e}", exc_info=True)
-        bot.edit_message_text("❌ Error during speed test.", chat_id, wait_msg.message_id)
-
-def _logic_contact_owner(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton('📞 Contact Owner', url=f'https://t.me/{YOUR_USERNAME.replace("@", "")}'))
-    bot.reply_to(message, "Click to contact Owner:", reply_markup=markup)
-
-def _logic_manual_install(message):
-    """Handle manual installation request from user"""
-    manual_install_module_init(message)
-
-def _logic_help(message):
-    help_text = """
-🤖 **DEMON Hosting Bot Help Guide**
-
-**📌 Basic Commands:**
-• /start - Start the bot
-• /help - Show this help message
-• /status - Show bot statistics
-
-**📁 File Management:**
-• Upload `.py` or `.js` files directly
-• Upload `.zip` archives with multiple files
-• Auto-installs dependencies from `requirements.txt` or `package.json`
-
-**📦 Module Installation:**
-• Auto-install missing Python/Node modules
-• Manual install via "📦 Manual Install" button
-• Admin can install modules for users
-
-**👑 Admin Features:**
-• User management (ban/unban)
-• Set custom file limits
-• Manage mandatory channels
-• Broadcast messages
-• Run all user scripts
-
-**⚙️ Tips:**
-1. Make sure your scripts don't contain dangerous commands
-2. Join all required channels
-3. Contact owner for subscription upgrades
-
-**Support:** @ARMAAN_BANNER
-**Updates:** @ARMAAN_BANNER
-"""
-    bot.reply_to(message, help_text, parse_mode='Markdown')
-
-# --- Admin Logic Functions ---
-def _logic_subscriptions_panel(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    bot.reply_to(message, "💳 Subscription Management\nUse inline buttons from /start or admin command menu.", reply_markup=create_subscription_menu())
-
-def _logic_statistics(message):
-    user_id = message.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    total_users = len(active_users)
-    total_files_records = sum(len(files) for files in user_files.values())
-
-    running_bots_count = 0
-    user_running_bots = 0
-
-    for script_key_iter, script_info_iter in list(bot_scripts.items()):
-        s_owner_id, _ = script_key_iter.split('_', 1)
-        if is_bot_running(int(s_owner_id), script_info_iter['file_name']):
-            running_bots_count += 1
-            if int(s_owner_id) == user_id:
-                user_running_bots +=1
-
-    stats_msg_base = (f"📊 Bot Statistics:\n\n"
-                      f"👥 Total Users: {total_users}\n"
-                      f"🚫 Banned Users: {len(banned_users)}\n"
-                      f"📂 Total File Records: {total_files_records}\n"
-                      f"🟢 Total Active Bots: {running_bots_count}\n")
-
-    if user_id in admin_ids:
-        stats_msg_admin = (f"🔒 Bot Status: {'🔴 Locked' if bot_locked else '🟢 Unlocked'}\n"
-                           f"📢 Mandatory Channels: {len(mandatory_channels)}\n"
-                           f"⚙️ Custom Limits: {len(user_limits)}\n"
-                           f"🤖 Your Running Bots: {user_running_bots}")
-        stats_msg = stats_msg_base + stats_msg_admin
-    else:
-        stats_msg = stats_msg_base + f"🤖 Your Running Bots: {user_running_bots}"
-
-    bot.reply_to(message, stats_msg)
-
-def _logic_broadcast_init(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    msg = bot.reply_to(message, "📢 Send message to broadcast to all active users.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_broadcast_message)
-
-def _logic_toggle_lock_bot(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    global bot_locked
-    bot_locked = not bot_locked
-    status = "locked" if bot_locked else "unlocked"
-    logger.warning(f"Bot {status} by Admin {message.from_user.id} via command/button.")
-    bot.reply_to(message, f"🔒 Bot has been {status}.")
-
-def _logic_admin_panel(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    bot.reply_to(message, "👑 Admin Panel\nManage admins. Use inline buttons from /start or admin menu.",
-                 reply_markup=create_admin_panel())
-
-def _logic_user_management(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    bot.reply_to(message, "👥 User Management\nManage users, set limits, ban/unban.", 
-                 reply_markup=create_user_management_menu())
-
-def _logic_admin_settings(message):
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    bot.reply_to(message, "⚙️ Admin Settings\nSystem information and management.", 
-                 reply_markup=create_admin_settings_menu())
-
-def _logic_run_all_scripts(message_or_call):
-    if isinstance(message_or_call, telebot.types.Message):
-        admin_user_id = message_or_call.from_user.id
-        admin_chat_id = message_or_call.chat.id
-        reply_func = lambda text, **kwargs: bot.reply_to(message_or_call, text, **kwargs)
-        admin_message_obj_for_script_runner = message_or_call
-    elif isinstance(message_or_call, telebot.types.CallbackQuery):
-        admin_user_id = message_or_call.from_user.id
-        admin_chat_id = message_or_call.message.chat.id
-        bot.answer_callback_query(message_or_call.id)
-        reply_func = lambda text, **kwargs: bot.send_message(admin_chat_id, text, **kwargs)
-        admin_message_obj_for_script_runner = message_or_call.message 
-    else:
-        logger.error("Invalid argument for _logic_run_all_scripts")
-        return
-
-    if admin_user_id not in admin_ids:
-        reply_func("⚠️ Admin permissions required.")
-        return
-
-    reply_func("⏳ Starting process to run all user scripts. This may take a while...")
-    logger.info(f"Admin {admin_user_id} initiated 'run all scripts' from chat {admin_chat_id}.")
-
-    started_count = 0; attempted_users = 0; skipped_files = 0; error_files_details = []
-
-    all_user_files_snapshot = dict(user_files)
-
-    for target_user_id, files_for_user in all_user_files_snapshot.items():
-        if not files_for_user: continue
-        attempted_users += 1
-        logger.info(f"Processing scripts for user {target_user_id}...")
-        user_folder = get_user_folder(target_user_id)
-
-        for file_name, file_type in files_for_user:
-            if not is_bot_running(target_user_id, file_name):
-                file_path = os.path.join(user_folder, file_name)
-                if os.path.exists(file_path):
-                    logger.info(f"Admin {admin_user_id} attempting to start '{file_name}' ({file_type}) for user {target_user_id}.")
-                    try:
-                        if file_type == 'py':
-                            threading.Thread(target=run_script, args=(file_path, target_user_id, user_folder, file_name, admin_message_obj_for_script_runner)).start()
-                            started_count += 1
-                        elif file_type == 'js':
-                            threading.Thread(target=run_js_script, args=(file_path, target_user_id, user_folder, file_name, admin_message_obj_for_script_runner)).start()
-                            started_count += 1
-                        else:
-                            logger.warning(f"Unknown file type '{file_type}' for {file_name} (user {target_user_id}). Skipping.")
-                            error_files_details.append(f"`{file_name}` (User {target_user_id}) - Unknown type")
-                            skipped_files += 1
-                        time.sleep(0.7)
-                    except Exception as e:
-                        logger.error(f"Error queueing start for '{file_name}' (user {target_user_id}): {e}")
-                        error_files_details.append(f"`{file_name}` (User {target_user_id}) - Start error")
-                        skipped_files += 1
-                else:
-                    logger.warning(f"File '{file_name}' for user {target_user_id} not found at '{file_path}'. Skipping.")
-                    error_files_details.append(f"`{file_name}` (User {target_user_id}) - File not found")
-                    skipped_files += 1
-
-    summary_msg = (f"✅ All Users' Scripts - Processing Complete:\n\n"
-                   f"▶️ Attempted to start: {started_count} scripts.\n"
-                   f"👥 Users processed: {attempted_users}.\n")
-    if skipped_files > 0:
-        summary_msg += f"⚠️ Skipped/Error files: {skipped_files}\n"
-        if error_files_details:
-             summary_msg += "Details (first 5):\n" + "\n".join([f"  - {err}" for err in error_files_details[:5]])
-             if len(error_files_details) > 5: summary_msg += "\n  ... and more (check logs)."
-
-    reply_func(summary_msg, parse_mode='Markdown')
-    logger.info(f"Run all scripts finished. Admin: {admin_user_id}. Started: {started_count}. Skipped/Errors: {skipped_files}")
-
-# --- New Admin Functions for Channel Management ---
-def _logic_manage_mandatory_channels(message):
-    """Manage mandatory channels - for admin only"""
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    bot.reply_to(message, "📢 Manage Mandatory Channels\nUse the buttons below:", reply_markup=create_mandatory_channels_menu())
-
-def _logic_admin_install(message):
-    """Admin manual installation for users"""
-    if message.from_user.id not in admin_ids:
-        bot.reply_to(message, "⚠️ Admin permissions required.")
-        return
-    msg = bot.reply_to(message, "🛠️ Admin Module Installation\nSend user ID and module name (e.g., `12345678 requests`)\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_admin_install)
-
-def process_admin_install(message):
-    """Process admin installation request"""
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Not authorized.")
-        return
-        
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Installation cancelled.")
-        return
-    
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "⚠️ Format: `user_id module_name`\nExample: `12345678 requests`")
-            return
-            
-        user_id = int(parts[0])
-        module_name = ' '.join(parts[1:])
-        
-        # Check if it's a Node.js module
-        if module_name.lower().startswith('npm:'):
-            module_name = module_name[4:].strip()
-            user_folder = get_user_folder(user_id)
-            success, log = attempt_install_npm(module_name, user_folder, message, manual_request=True)
+async def send_force_join_prompt(update: Update, missing: list[dict]) -> None:
+    buttons = []
+    for ch in missing:
+        if ch.get("username"):
+            url = f"https://t.me/{ch['username'].lstrip('@')}"
+        elif ch.get("invite_link"):
+            url = ch["invite_link"]
         else:
-            # Python module
-            success, log = attempt_install_pip(module_name, message, manual_request=True)
-        
-        if success:
-            logger.info(f"Admin {admin_id} installed module {module_name} for user {user_id}")
-            # Notify user
-            try:
-                bot.send_message(user_id, f"📦 Admin installed module `{module_name}` for you.")
-            except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid user ID. Must be a number.")
-    except Exception as e:
-        logger.error(f"Error in admin install: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-# --- Command Handlers & Text Handlers for ReplyKeyboard ---
-@bot.message_handler(commands=['start', 'help'])
-def command_send_welcome(message): 
-    if message.text == '/help':
-        _logic_help(message)
+            continue
+        buttons.append([InlineKeyboardButton(f"📢 {ch['title']}", url=url, style="primary")])
+    buttons.append([InlineKeyboardButton("✅ Verify", callback_data="verify_join", style="primary")])
+    text = (
+        "🔒 <b>Access Restricted</b>\n\n"
+        "To use this bot, please join all required channels below, "
+        "then tap <b>✅ Verify</b>."
+    )
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML
+        )
     else:
-        _logic_send_welcome(message)
+        await update.effective_message.reply_text(
+            text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML
+        )
 
-@bot.message_handler(commands=['status'])
-def command_show_status(message): _logic_statistics(message)
 
-BUTTON_TEXT_TO_LOGIC = {
-    "📢 Updates Channel": _logic_updates_channel,
-    "📤 Upload File": _logic_upload_file,
-    "📂 Check Files": _logic_check_files,
-    "⚡ Bot Speed": _logic_bot_speed,
-    "📞 Contact Owner": _logic_contact_owner,
-    "📊 Statistics": _logic_statistics, 
-    "💳 Subscriptions": _logic_subscriptions_panel,
-    "📢 Broadcast": _logic_broadcast_init,
-    "🔒 Lock Bot": _logic_toggle_lock_bot, 
-    "🟢 Running All Code": _logic_run_all_scripts,
-    "👑 Admin Panel": _logic_admin_panel,
-    "📢 Channel Add": _logic_manage_mandatory_channels,
-    "👥 User Management": _logic_user_management,
-    "🛠️ Manual Install": _logic_manual_install,
-    "⚙️ Settings": _logic_admin_settings,
-    "📦 Manual Install": _logic_manual_install,
-    "🆘 Help": _logic_help
+
+(UP_FILE, UP_NAME, UP_DESC, UP_PRICE, UP_PREVIEW) = range(5)
+(BC_PKG, BC_STARS, BC_SCREENSHOT) = range(10, 13)
+(RD_CODE,) = range(20, 21)
+(FC_ADD,) = range(30, 31)
+(UM_SEARCH, UM_AMOUNT) = range(40, 42)
+(RM_CODE, RM_COINS, RM_PREMIUM, RM_LIMIT, RM_EXPIRY, RM_DELETE) = range(50, 56)
+(BR_CONTENT,) = range(60, 61)
+(ST_VALUE,) = range(70, 71)
+(EF_FIELD,) = range(80, 81)
+(WB_IDS, WB_ACTION, WB_AMOUNT, WB_PREMIUM) = range(90, 94)
+(BDT_AMOUNT, BDT_PROOF) = range(94, 96)
+(GC_AMOUNT,) = range(96, 97)
+(AM_ADD_USER, AM_ADD_ROLE) = range(97, 99)
+(TK_SUBJECT, TK_BODY, TK_REPLY, TK_USER_REPLY) = range(99, 103)
+(FR_TEXT,) = range(103, 104)
+(MF_SEARCH,) = range(104, 105)
+
+ADMIN_ONLY_MSG = "🚫 This action is for admins only."
+OWNER_ONLY_MSG = "🚫 This is restricted to the Owner only. Senior/Junior admins don't have access to this section."
+ADMIN_MAX_REDEEM_COINS = 300
+ADMIN_MIN_REDEEM_COINS = 20
+ADMIN_DAILY_REDEEM_LIMIT = 2
+
+
+async def require_owner(update: Update) -> bool:
+    """Gate for Owner-only sections (Settings, Force Channels, Payment approval,
+    Bulk User Manage, Manage Files list). Senior and Junior admins are both
+    blocked — only OWNER_ID passes. Sends a denial message/alert and returns
+    False if the caller isn't the owner."""
+    if update.effective_user.id == OWNER_ID:
+        return True
+    if update.callback_query:
+        await update.callback_query.answer(OWNER_ONLY_MSG, show_alert=True)
+    else:
+        await update.effective_message.reply_text(OWNER_ONLY_MSG)
+    return False
+
+
+def fmt_size(num: int) -> str:
+    step = 1024.0
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if num < step:
+            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} {unit}"
+        num /= step
+    return f"{num:.1f} PB"
+
+
+def fmt_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        return datetime.fromisoformat(iso).strftime("%d %b %Y, %H:%M")
+    except Exception:
+        return iso
+
+
+
+async def _update_login_streak(bot, user_id: int) -> None:
+    """Increments a user's consecutive-day login streak (resets if a day was
+    missed), and grants a one-time bonus whenever a configured streak
+    milestone is newly reached. Cheap no-op on repeat calls within the same
+    day since guard_user runs on every interaction."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    async with db_conn() as db:
+        cur = await db.execute("SELECT login_streak, last_login_date FROM users WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        if not row:
+            return
+        streak, last_date = row[0] or 0, row[1]
+        if last_date == today:
+            return
+
+        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+        new_streak = streak + 1 if last_date == yesterday else 1
+        await db.execute(
+            "UPDATE users SET login_streak=?, last_login_date=? WHERE user_id=?", (new_streak, today, user_id)
+        )
+        await db.commit()
+
+    rewards = json.loads(await get_setting("streak_rewards", "[]"))
+    for r in rewards:
+        if r["days"] == new_streak:
+            await add_coins(user_id, r["reward"], "login_streak", f"{new_streak}-day login streak bonus")
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"🔥 <b>{new_streak}-Day Login Streak!</b>\n\n🪙 Bonus: <b>+{r['reward']} Coins</b>\n\nKeep it going!",
+                    parse_mode=ParseMode.HTML,
+                )
+            except TelegramError:
+                pass
+            break
+
+
+async def guard_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Returns True if the update should proceed normally."""
+    user = update.effective_user
+    if user is None:
+        return False
+
+    await ensure_user(user.id, user.username, user.first_name)
+    await _update_login_streak(context.bot, user.id)
+
+    admin = await is_admin(user.id)
+
+    maintenance = (await get_setting("maintenance", "0")) == "1"
+    if maintenance and not admin:
+        await update.effective_message.reply_text(
+            "🚧 <b>Bot is under maintenance.</b>\nPlease try again later.",
+            parse_mode=ParseMode.HTML,
+        )
+        return False
+
+    if await is_banned(user.id):
+        await update.effective_message.reply_text(
+            "🚫 You have been banned from using this bot. Contact support if you think this is a mistake."
+        )
+        return False
+
+    if not admin:
+        missing = await check_force_join(context.bot, user.id)
+        if missing:
+            await send_force_join_prompt(update, missing)
+            return False
+
+    return True
+
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    args = context.args
+
+    maintenance = (await get_setting("maintenance", "0")) == "1"
+    admin = await is_admin(user.id)
+    if maintenance and not admin:
+        await update.effective_message.reply_text(
+            "🚧 <b>Bot is under maintenance.</b>\nPlease try again later.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if await is_banned(user.id):
+        await update.effective_message.reply_text("🚫 You have been banned from using this bot.")
+        return
+
+    referred_by = None
+    if args and args[0].isdigit():
+        ref_id = int(args[0])
+        if ref_id != user.id:
+            existing = await get_user_row(user.id)
+            if existing is None:
+                referred_by = ref_id
+
+    is_new = await ensure_user(user.id, user.username, user.first_name, referred_by)
+
+    if not admin:
+        missing = await check_force_join(context.bot, user.id)
+        if missing:
+            await send_force_join_prompt(update, missing)
+            return
+
+    await maybe_process_referral(context.bot, user.id)
+
+    await show_main_menu(update, context)
+
+
+async def maybe_process_referral(bot, user_id: int) -> None:
+    """Grants the referral reward once the referred user actually reaches the
+    bot (i.e. after passing force-join, or immediately if none is required).
+    Safe to call repeatedly — process_referral() is idempotent."""
+    row = await get_user_row(user_id)
+    if row and row["referred_by"]:
+        await process_referral(bot, row["referred_by"], user_id)
+
+
+async def process_referral(bot, referrer_id: int, new_user_id: int) -> None:
+    async with db_conn() as db:
+        cur = await db.execute("SELECT 1 FROM users WHERE user_id=?", (referrer_id,))
+        if not await cur.fetchone():
+            return
+        cur = await db.execute("SELECT 1 FROM referrals WHERE new_user_id=?", (new_user_id,))
+        if await cur.fetchone():
+            return
+        reward = int(await get_setting("referral_reward", "20"))
+        await db.execute(
+            "INSERT INTO referrals (referrer_id, new_user_id, date, reward) VALUES (?, ?, ?, ?)",
+            (referrer_id, new_user_id, datetime.utcnow().isoformat(), reward),
+        )
+        await db.commit()
+
+    new_balance = await add_coins(referrer_id, reward, "referral", f"Referral bonus for inviting user {new_user_id}")
+
+    new_user_row = await get_user_row(new_user_id)
+    if new_user_row and new_user_row["username"]:
+        uname = f"@{new_user_row['username']}"
+    elif new_user_row and new_user_row["first_name"]:
+        uname = new_user_row["first_name"]
+    else:
+        uname = f"User {new_user_id}"
+
+    try:
+        await bot.send_message(
+            referrer_id,
+            "🎉 <b>New Referral Alert!</b> 🎉\n\n"
+            f"👤 <b>User:</b> {html.escape(uname)}\n"
+            f"🪙 <b>You earned:</b> +{reward} coins\n"
+            f"💰 <b>Your new balance:</b> {new_balance} coins",
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramError:
+        pass
+
+    await _check_referral_milestone(bot, referrer_id)
+
+
+async def _check_referral_milestone(bot, referrer_id: int) -> None:
+    """Grants a one-time bonus the first time a referrer's total count crosses
+    a configured milestone (e.g. 5, 10, 25, 50 referrals)."""
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (referrer_id,))
+        total = (await cur.fetchone())[0]
+        cur = await db.execute("SELECT referral_milestone_reached FROM users WHERE user_id=?", (referrer_id,))
+        row = await cur.fetchone()
+        already_reached = row[0] if row and row[0] else 0
+
+    milestones = json.loads(await get_setting("referral_milestones", "[]"))
+    for m in sorted(milestones, key=lambda x: x["count"]):
+        if total >= m["count"] > already_reached:
+            await add_coins(referrer_id, m["reward"], "referral_milestone", f"Referral milestone: {m['count']} referrals")
+            async with db_conn() as db:
+                await db.execute("UPDATE users SET referral_milestone_reached=? WHERE user_id=?", (m["count"], referrer_id))
+                await db.commit()
+            try:
+                await bot.send_message(
+                    referrer_id,
+                    f"🏆 <b>Referral Milestone Reached!</b>\n\n"
+                    f"🚀 You've referred <b>{m['count']}</b> people!\n"
+                    f"🪙 Bonus: <b>+{m['reward']} Coins</b>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except TelegramError:
+                pass
+            break
+
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    admin = await is_admin(user.id)
+    bot_name = await get_setting("bot_name", "FILE STORE BOT 🛍️")
+    balance = await get_balance(user.id)
+
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user.id,))
+        ref_count = (await cur.fetchone())[0]
+
+    is_premium = await is_premium_active(user.id)
+    premium_line = "👑 <b>Premium — Active</b>" if is_premium else "⭐ Premium: <i>Not Active</i>"
+    name_tag = f"👑 {html.escape(user.first_name or 'Friend')}" if is_premium else html.escape(user.first_name or "Friend")
+
+    text = (
+        f"👋 <b>Welcome, {name_tag}!</b>\n\n"
+        f"🏷 <b>{html.escape(bot_name)}</b> <i>({BOT_VERSION})</i>\n"
+        f"{DIVIDER}\n"
+        f"🪙 <b>Wallet:</b> {balance} Coins\n"
+        f"👥 <b>Referrals:</b> {ref_count}\n"
+        f"{premium_line}\n"
+        f"{DIVIDER}\n\n"
+        f"Use the menu below to get started 👇"
+    )
+    await update.effective_message.reply_text(
+        text, parse_mode=ParseMode.HTML, reply_markup=user_reply_keyboard(admin)
+    )
+
+
+async def cb_verify_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    missing = await check_force_join(context.bot, user.id)
+    if missing:
+        await query.answer("❌ You haven't joined all channels yet.", show_alert=True)
+        return
+    await query.answer("✅ Verified!")
+    try:
+        await query.message.delete()
+    except BadRequest:
+        pass
+    await ensure_user(user.id, user.username, user.first_name)
+    await maybe_process_referral(context.bot, user.id)
+    await show_main_menu(update, context)
+
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    text = (
+        "📖 <b>Help & Guide</b>\n\n"
+        "📁 <b>Buy Files</b> — Browse and purchase files with coins.\n"
+        "🪙 <b>Coins</b> — Buy coins with Telegram Stars, or earn them free via "
+        "Daily Bonus, Referrals, and Redeem Codes.\n"
+        "👥 <b>Referral</b> — Share your personal link, earn coins per new user.\n"
+        "🎟️ <b>Redeem</b> — Enter a code from the admin to instantly get coins.\n"
+        "💬 <b>Support</b> — Reach out any time via the Support menu.\n"
+    )
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    support_username = await get_setting("support_username", "ARMAAN_x7x")
+    text = (
+        "💬 <b>Support</b>\n\n"
+        f"👤 Contact: @{html.escape(support_username)}\n"
+        "🕒 Business Hours: 10:00 AM – 10:00 PM (IST)\n\n"
+        "We usually reply within a few hours."
+    )
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+
+async def handle_support_ticket_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await guard_user(update, context):
+        return ConversationHandler.END
+    await update.effective_message.reply_text(
+        "🎫 <b>Open a Support Ticket</b>\n\nWhat's the subject? (short, one line):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="ticket:cancel", style="primary")]]),
+    )
+    return TK_SUBJECT
+
+
+async def cb_ticket_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    context.user_data.pop("tk_subject", None)
+    return ConversationHandler.END
+
+
+async def conv_ticket_subject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    subject = update.message.text.strip()
+    if len(subject) > 100:
+        await update.message.reply_text("❌ Please keep the subject under 100 characters.")
+        return TK_SUBJECT
+    context.user_data["tk_subject"] = subject
+    await update.message.reply_text("📝 Now describe your issue in detail:")
+    return TK_BODY
+
+
+async def conv_ticket_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    body = update.message.text.strip()
+    subject = context.user_data.pop("tk_subject", "")
+    user = update.effective_user
+
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO tickets (user_id, subject, body, status, created_at) VALUES (?, ?, ?, 'open', ?)",
+            (user.id, subject, body, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        ticket_id = (await cur.fetchone())[0]
+
+    await update.message.reply_text(
+        f"✅ <b>Ticket #{ticket_id} Submitted!</b>\n\nOur team will get back to you soon.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    uname = f"@{user.username}" if user.username else "—"
+    notify = (
+        f"🎫 <b>New Support Ticket #{ticket_id}</b>\n\n"
+        f"👤 From: {html.escape(uname)}\n🆔 User ID: <code>{user.id}</code>\n"
+        f"📌 Subject: {html.escape(subject)}\n\n📝 {html.escape(body)}"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Reply", callback_data=f"ticket:reply:{ticket_id}", style="primary"),
+         InlineKeyboardButton("✅ Close", callback_data=f"ticket:close:{ticket_id}", style="primary")],
+    ])
+    for admin_id in await get_all_admin_ids():
+        try:
+            await context.bot.send_message(admin_id, notify, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except TelegramError:
+            pass
+    return ConversationHandler.END
+
+
+async def cb_ticket_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if not await is_admin(update.effective_user.id):
+        await query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    ticket_id = int(query.data.split(":")[2])
+    context.user_data["tk_reply_id"] = ticket_id
+    await query.message.reply_text("💬 Type your reply — it will be sent to the user:")
+    return TK_REPLY
+
+
+async def conv_ticket_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    ticket_id = context.user_data.pop("tk_reply_id", None)
+    if ticket_id is None:
+        await update.message.reply_text("❌ Something went wrong — please try again.")
+        return ConversationHandler.END
+    reply_text = update.message.text.strip()
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM tickets WHERE ticket_id=?", (ticket_id,))
+        ticket = await cur.fetchone()
+
+    if not ticket:
+        await update.message.reply_text("❌ Ticket not found.")
+        return ConversationHandler.END
+    if ticket["status"] != "open":
+        await update.message.reply_text("🚫 This ticket is already closed.")
+        return ConversationHandler.END
+
+    user_kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Reply", callback_data=f"ticket:ureply:{ticket_id}", style="primary")]])
+    try:
+        await context.bot.send_message(
+            ticket["user_id"],
+            f"🎫 <b>Support Reply (Ticket #{ticket_id})</b>\n\n{html.escape(reply_text)}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=user_kb,
+        )
+        await update.message.reply_text("✅ Reply sent to the user.")
+    except TelegramError:
+        await update.message.reply_text("⚠️ Couldn't deliver the reply — the user may have blocked the bot.")
+
+    await log_admin_action(context.bot, update.effective_user.id, f"💬 Replied to ticket #{ticket_id}")
+    return ConversationHandler.END
+
+
+async def cb_ticket_user_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    ticket_id = int(query.data.split(":")[2])
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM tickets WHERE ticket_id=?", (ticket_id,))
+        ticket = await cur.fetchone()
+
+    if not ticket:
+        await query.answer("❌ Ticket not found.", show_alert=True)
+        return ConversationHandler.END
+    if ticket["user_id"] != update.effective_user.id:
+        await query.answer("🚫 This isn't your ticket.", show_alert=True)
+        return ConversationHandler.END
+    if ticket["status"] != "open":
+        await query.answer("🚫 This ticket is already closed.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    context.user_data["tk_user_reply_id"] = ticket_id
+    await query.message.reply_text(
+        "💬 Type your reply:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="ticket:cancel", style="primary")]]),
+    )
+    return TK_USER_REPLY
+
+
+async def conv_ticket_user_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    ticket_id = context.user_data.pop("tk_user_reply_id", None)
+    if ticket_id is None:
+        await update.message.reply_text("❌ Something went wrong — please try again.")
+        return ConversationHandler.END
+    reply_text = update.message.text.strip()
+    user = update.effective_user
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM tickets WHERE ticket_id=?", (ticket_id,))
+        ticket = await cur.fetchone()
+
+    if not ticket:
+        await update.message.reply_text("❌ Ticket not found.")
+        return ConversationHandler.END
+    if ticket["status"] != "open":
+        await update.message.reply_text("🚫 This ticket is already closed.")
+        return ConversationHandler.END
+
+    await update.message.reply_text("✅ Reply sent to support.")
+
+    uname = f"@{user.username}" if user.username else "—"
+    notify = (
+        f"🎫 <b>Ticket #{ticket_id} — User Reply</b>\n\n"
+        f"👤 From: {html.escape(uname)}\n🆔 User ID: <code>{user.id}</code>\n\n💬 {html.escape(reply_text)}"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Reply", callback_data=f"ticket:reply:{ticket_id}", style="primary"),
+         InlineKeyboardButton("✅ Close", callback_data=f"ticket:close:{ticket_id}", style="primary")],
+    ])
+    for admin_id in await get_all_admin_ids():
+        try:
+            await context.bot.send_message(admin_id, notify, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except TelegramError:
+            pass
+    return ConversationHandler.END
+
+
+async def cb_ticket_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not await is_admin(update.effective_user.id):
+        await query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        return
+    ticket_id = int(query.data.split(":")[2])
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM tickets WHERE ticket_id=?", (ticket_id,))
+        ticket = await cur.fetchone()
+        if not ticket:
+            await query.answer("❌ Not found.", show_alert=True)
+            return
+        await db.execute(
+            "UPDATE tickets SET status='closed', admin_id=?, closed_at=? WHERE ticket_id=?",
+            (update.effective_user.id, datetime.utcnow().isoformat(), ticket_id),
+        )
+        await db.commit()
+    await query.answer("✅ Closed")
+    try:
+        await query.message.delete()
+    except TelegramError:
+        pass
+    try:
+        await context.bot.send_message(
+            ticket["user_id"], f"✅ <b>Your ticket #{ticket_id} has been closed.</b>", parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        pass
+    await log_admin_action(context.bot, update.effective_user.id, f"✅ Closed ticket #{ticket_id}")
+
+
+
+async def handle_file_request_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await guard_user(update, context):
+        return ConversationHandler.END
+    await update.effective_message.reply_text(
+        "📥 <b>Request a File</b>\n\nTell us what file/project you're looking for — we'll try to add it:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="freq:cancel", style="primary")]]),
+    )
+    return FR_TEXT
+
+
+async def cb_file_request_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
+
+async def conv_file_request_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    user = update.effective_user
+
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO file_requests (user_id, request_text, status, timestamp) VALUES (?, ?, 'open', ?)",
+            (user.id, text, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        req_id = (await cur.fetchone())[0]
+
+    await update.message.reply_text("✅ <b>Request Submitted!</b>\n\nThanks — we'll review it soon.", parse_mode=ParseMode.HTML)
+
+    uname = f"@{user.username}" if user.username else "—"
+    notify = (
+        f"📥 <b>New File Request #{req_id}</b>\n\n"
+        f"👤 From: {html.escape(uname)}\n🆔 User ID: <code>{user.id}</code>\n\n📝 {html.escape(text)}"
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Mark Fulfilled", callback_data=f"freq:done:{req_id}", style="primary")]])
+    for admin_id in await get_all_admin_ids():
+        try:
+            await context.bot.send_message(admin_id, notify, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except TelegramError:
+            pass
+    return ConversationHandler.END
+
+
+async def cb_file_request_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not await is_admin(update.effective_user.id):
+        await query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        return
+    req_id = int(query.data.split(":")[2])
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM file_requests WHERE request_id=?", (req_id,))
+        req = await cur.fetchone()
+        if not req:
+            await query.answer("❌ Not found.", show_alert=True)
+            return
+        await db.execute("UPDATE file_requests SET status='fulfilled' WHERE request_id=?", (req_id,))
+        await db.commit()
+    await query.answer("✅ Marked fulfilled")
+    try:
+        await query.message.delete()
+    except TelegramError:
+        pass
+    try:
+        await context.bot.send_message(
+            req["user_id"],
+            f"✅ <b>Your file request has been fulfilled!</b>\n\n📝 {html.escape(req['request_text'])}\n\nCheck 📁 Buy Files!",
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramError:
+        pass
+    await log_admin_action(context.bot, update.effective_user.id, f"✅ Fulfilled file request #{req_id}")
+
+
+async def handle_my_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    await send_wallet_view(update, context)
+
+
+async def send_wallet_view(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> None:
+    user = update.effective_user
+    balance = await get_balance(user.id)
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user.id,))
+        ref_count = (await cur.fetchone())[0]
+    daily_status = await bonus_status_text(user.id)
+    is_premium = await is_premium_active(user.id)
+    premium_line = "👑 <b>Premium — Active</b>" if is_premium else "⭐ Premium: <i>Not Active</i>"
+
+    text = (
+        "💎 <b>My Wallet</b>\n"
+        f"{DIVIDER}\n"
+        f"🪙 <b>Coins:</b> {balance}\n"
+        f"👥 <b>Total Referrals:</b> {ref_count}\n"
+        f"🎁 <b>Daily Bonus:</b> {daily_status}\n"
+        f"{premium_line}\n"
+        f"{DIVIDER}"
+    )
+    buttons = [
+        [InlineKeyboardButton("⭐ Buy Coins (Stars)", callback_data="wallet:buycoins", style="success"),
+         InlineKeyboardButton("💵 Buy Coins (৳)", callback_data="wallet:buybdt", style="success")],
+        [InlineKeyboardButton("📜 Transactions", callback_data="wallet:tx:0", style="primary")],
+    ]
+    if not is_premium:
+        buttons.append([InlineKeyboardButton("👑 Buy Premium with Coins", callback_data="wallet:buypremium", style="primary")])
+    kb = InlineKeyboardMarkup(buttons)
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_wallet_buy_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if await is_premium_active(update.effective_user.id):
+        await query.answer("✅ You already have Premium active.", show_alert=True)
+        return
+    pricing = json.loads(await get_setting("premium_pricing", "[]"))
+    balance = await get_balance(update.effective_user.id)
+    lines = [f"👑 <b>Buy Premium with Coins</b>\n{DIVIDER}", f"🪙 Your balance: <b>{balance}</b>\n"]
+    buttons = []
+    for p in pricing:
+        label = "Lifetime" if p["days"] == 0 else f"{p['days']} Days"
+        lines.append(f"• {label} — 🪙 {p['price']}")
+        buttons.append([InlineKeyboardButton(f"👑 {label} — {p['price']} coins", callback_data=f"premium:buy:{p['days']}:{p['price']}", style="primary")])
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="wallet:home", style="primary")])
+    await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_premium_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    _, _, days, price = query.data.split(":")
+    days, price = int(days), int(price)
+
+    lock = await get_user_action_lock(user.id)
+    async with lock:
+        if await is_premium_active(user.id):
+            await query.answer("✅ You already have Premium active.", show_alert=True)
+            return
+        ok = await remove_coins(user.id, price, "premium_purchase", f"Bought Premium ({'Lifetime' if days == 0 else f'{days} days'})")
+        if not ok:
+            await query.answer("❌ Not enough Coins for this plan.", show_alert=True)
+            return
+        await grant_premium(user.id, None if days == 0 else days, admin_id=0)
+
+    await query.answer("👑 Premium activated!")
+    label = "Lifetime" if days == 0 else f"{days} Days"
+    await query.edit_message_text(
+        f"🎉 <b>Premium Activated!</b>\n\n👑 Plan: <b>{label}</b>\n🪙 Paid: <b>{price} coins</b>\n\n"
+        "Enjoy your Premium badge, bonus multiplier, and priority support!",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def bonus_status_text(user_id: int) -> str:
+    row = await get_user_row(user_id)
+    if row and row["last_bonus_time"]:
+        last = datetime.fromisoformat(row["last_bonus_time"])
+        elapsed = datetime.utcnow() - last
+        if elapsed < timedelta(hours=24):
+            remaining = timedelta(hours=24) - elapsed
+            h, rem = divmod(int(remaining.total_seconds()), 3600)
+            m = rem // 60
+            return f"⏳ Available in {h}h {m}m"
+    return "✅ Available now"
+
+
+async def cb_wallet_tx(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    page = int(query.data.split(":")[2])
+    per_page = 8
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM transactions WHERE user_id=? ORDER BY tx_id DESC LIMIT ? OFFSET ?",
+            (user.id, per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    if not rows and page == 0:
+        text = "📜 <b>Transactions</b>\n\nNo transactions yet."
+    else:
+        lines = ["📜 <b>Transactions</b>\n"]
+        for r in rows:
+            sign = "+" if r["amount"] >= 0 else ""
+            lines.append(
+                f"{'🟢' if r['amount']>=0 else '🔴'} {sign}{r['amount']} 🪙 — {html.escape(r['tx_type'])} "
+                f"<i>({fmt_date(r['timestamp'])})</i>"
+            )
+        text = "\n".join(lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"wallet:tx:{page-1}", style="primary"))
+    if len(rows) == per_page:
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"wallet:tx:{page+1}", style="primary"))
+    buttons = [nav] if nav else []
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="wallet:home", style="primary")])
+    await query.answer()
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_wallet_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.callback_query.answer()
+    await send_wallet_view(update, context, edit=True)
+
+
+
+async def cb_buycoins_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    packages = json.loads(await get_setting("coin_packages", "[]"))
+    payment_username = await get_setting("payment_username", "ARMAAN_x7x")
+    lines = ["⭐ <b>Buy Coins — Manual Stars Payment</b>\n"]
+    for i, p in enumerate(packages):
+        lines.append(f"🪙 {p['coins']} Coins = ⭐ {p['stars']} Stars")
+    lines.append(f"\nSend Stars To: <b>@{html.escape(payment_username)}</b>")
+    lines.append("\nAfter sending, tap <b>⭐ I Have Paid</b> below.")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ I Have Paid", callback_data="buycoins:paid", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data="wallet:home", style="primary")],
+    ])
+    await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=kb)
+    return ConversationHandler.END
+
+
+async def cb_buycoins_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "⭐ How many Stars did you send? (numbers only)",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="buycoins:cancel", style="primary")]]),
+    )
+    return BC_STARS
+
+
+async def conv_buycoins_stars(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ Please send a valid number of Stars.")
+        return BC_STARS
+    context.user_data["bc_stars"] = int(text)
+    await update.message.reply_text("📷 Please send your payment screenshot now.")
+    return BC_SCREENSHOT
+
+
+async def conv_buycoins_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message.photo and not update.message.document:
+        await update.message.reply_text("❌ Please send a screenshot as a photo or document.")
+        return BC_SCREENSHOT
+
+    file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+    stars = context.user_data.pop("bc_stars")
+    user = update.effective_user
+
+    async with db_conn() as db:
+        cur = await db.execute(
+            "SELECT 1 FROM payments WHERE user_id=? AND status='pending'", (user.id,)
+        )
+        if await cur.fetchone():
+            await update.message.reply_text(
+                "⚠️ You already have a pending payment request. Please wait for admin review."
+            )
+            return ConversationHandler.END
+
+        packages = json.loads(await get_setting("coin_packages", "[]"))
+        coins = 0
+        for p in packages:
+            if p["stars"] == stars:
+                coins = p["coins"]
+                break
+        if coins == 0:
+            rate = float(await get_setting("star_rate", "30"))
+            coins = int(stars * rate / 30 * 100)
+
+        await db.execute(
+            "INSERT INTO payments (user_id, stars, coins, screenshot_file_id, status, timestamp) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (user.id, stars, coins, file_id, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        payment_id = (await cur.fetchone())[0]
+
+    await update.message.reply_text(
+        "✅ Your payment request has been submitted. You'll be notified once reviewed."
+    )
+
+    uname = f"@{user.username}" if user.username else "—"
+    caption = (
+        "💰 <b>New Payment Request</b>\n\n"
+        f"👤 Username: {html.escape(uname)}\n"
+        f"🆔 User ID: <code>{user.id}</code>\n"
+        f"⭐ Stars: <b>{stars}</b>\n"
+        f"🪙 Coins: <b>{coins}</b>\n"
+        f"📅 Time: {fmt_date(datetime.utcnow().isoformat())}"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Accept", callback_data=f"pay:accept:{payment_id}", style="primary"),
+         InlineKeyboardButton("❌ Reject", callback_data=f"pay:reject:{payment_id}", style="primary")]
+    ])
+    admin_ids = [OWNER_ID]
+    for admin_id in admin_ids:
+        try:
+            if update.message.photo:
+                await context.bot.send_photo(admin_id, file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+            else:
+                await context.bot.send_document(admin_id, file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except TelegramError:
+            pass
+    return ConversationHandler.END
+
+
+async def cb_buycoins_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    context.user_data.pop("bc_stars", None)
+    return ConversationHandler.END
+
+
+
+async def handle_buy_coins_bdt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+    if not await guard_user(update, context):
+        return
+    rate = await get_setting("coin_rate_bdt", "5")
+    details = await get_setting("bdt_payment_details", "")
+    text = (
+        "💵 <b>Buy Coins with Taka (৳)</b>\n"
+        f"{DIVIDER}\n"
+        f"💱 Rate: <b>1 ৳ = {html.escape(rate)} Coins</b>\n\n"
+        f"{html.escape(details)}\n\n"
+        "Send the amount via bKash/Nagad (Send Money), then tap <b>💵 I Have Paid</b> below."
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💵 I Have Paid", callback_data="buybdt:paid", style="primary")]])
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_buybdt_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "💵 How many Taka (৳) did you send? (numbers only)",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="buybdt:cancel", style="primary")]]),
+    )
+    return BDT_AMOUNT
+
+
+async def conv_buybdt_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ Please send a valid Taka amount.")
+        return BDT_AMOUNT
+    context.user_data["bdt_amount"] = int(text)
+    await update.message.reply_text(
+        "📷 Please send your payment screenshot now — or type your bKash/Nagad Transaction ID as text."
+    )
+    return BDT_PROOF
+
+
+async def conv_buybdt_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    amount = context.user_data.pop("bdt_amount", None)
+    if amount is None:
+        await update.message.reply_text("❌ Something went wrong — please start again from 💵 Buy Coins (৳).")
+        return ConversationHandler.END
+
+    file_id = None
+    is_photo = False
+    txn_text = None
+    if update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        is_photo = True
+    elif update.message.document:
+        file_id = update.message.document.file_id
+    elif update.message.text:
+        txn_text = update.message.text.strip()
+    else:
+        await update.message.reply_text("❌ Please send a screenshot, or type your Transaction ID as text.")
+        return BDT_PROOF
+
+    user = update.effective_user
+
+    async with db_conn() as db:
+        cur = await db.execute("SELECT 1 FROM payments WHERE user_id=? AND status='pending'", (user.id,))
+        if await cur.fetchone():
+            await update.message.reply_text("⚠️ You already have a pending payment request. Please wait for admin review.")
+            return ConversationHandler.END
+
+        rate = float(await get_setting("coin_rate_bdt", "5"))
+        coins = int(amount * rate)
+
+        await db.execute(
+            "INSERT INTO payments (user_id, coins, screenshot_file_id, status, timestamp, payment_method, amount_bdt) "
+            "VALUES (?, ?, ?, 'pending', ?, 'bdt', ?)",
+            (user.id, coins, file_id, datetime.utcnow().isoformat(), amount),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT last_insert_rowid()")
+        payment_id = (await cur.fetchone())[0]
+
+    await update.message.reply_text("✅ Your payment request has been submitted. You'll be notified once reviewed.")
+
+    uname = f"@{user.username}" if user.username else "—"
+    txn_note = f"\n🧾 Transaction ID: <code>{html.escape(txn_text)}</code>" if txn_text else ""
+    caption = (
+        "💵 <b>New BDT Payment Request</b>\n\n"
+        f"👤 Username: {html.escape(uname)}\n"
+        f"🆔 User ID: <code>{user.id}</code>\n"
+        f"💵 Amount: <b>৳{amount}</b>\n"
+        f"🪙 Coins: <b>{coins}</b>{txn_note}\n"
+        f"📅 Time: {fmt_date(datetime.utcnow().isoformat())}"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Accept", callback_data=f"pay:accept:{payment_id}", style="primary"),
+         InlineKeyboardButton("❌ Reject", callback_data=f"pay:reject:{payment_id}", style="primary")]
+    ])
+    admin_ids = [OWNER_ID]
+    for admin_id in admin_ids:
+        try:
+            if file_id and is_photo:
+                await context.bot.send_photo(admin_id, file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+            elif file_id:
+                await context.bot.send_document(admin_id, file_id, caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+            else:
+                await context.bot.send_message(admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except TelegramError:
+            pass
+    return ConversationHandler.END
+
+
+async def cb_buybdt_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    context.user_data.pop("bdt_amount", None)
+    return ConversationHandler.END
+
+
+async def get_all_admin_ids() -> list[int]:
+    ids = {OWNER_ID}
+    async with db_conn() as db:
+        cur = await db.execute("SELECT user_id FROM admins")
+        rows = await cur.fetchall()
+        for r in rows:
+            ids.add(r[0])
+    return list(ids)
+
+
+async def get_admin_role(user_id: int) -> str | None:
+    """Returns 'owner', 'senior', 'junior', or None (not an admin)."""
+    if user_id == OWNER_ID:
+        return "owner"
+    async with db_conn() as db:
+        cur = await db.execute("SELECT role FROM admins WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def log_admin_action(bot, actor_id: int, action_text: str) -> None:
+    """Audit trail with a Senior/Junior hierarchy:
+    - Junior admin actions -> notify Owner + all Senior admins.
+    - Senior admin actions -> notify Owner only.
+    - Owner's own actions -> no notification needed.
+    Every action (including the Owner's own) is persisted to admin_logs for
+    the browsable Action Log Viewer."""
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO admin_logs (actor_id, action_text, timestamp) VALUES (?, ?, ?)",
+            (actor_id, action_text, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+    if actor_id == OWNER_ID:
+        return
+    role = await get_admin_role(actor_id)
+    actor_row = await get_user_row(actor_id)
+    actor_label = f"@{actor_row['username']}" if actor_row and actor_row["username"] else str(actor_id)
+    role_tag = f" [{role}]" if role else ""
+    text = f"📋 <b>Admin Action</b>\n\n👤 By: {html.escape(actor_label)}{role_tag} (<code>{actor_id}</code>)\n{action_text}"
+
+    recipients = {OWNER_ID}
+    if role == "junior":
+        async with db_conn() as db:
+            cur = await db.execute("SELECT user_id FROM admins WHERE role='senior'")
+            for r in await cur.fetchall():
+                recipients.add(r[0])
+
+    for uid in recipients:
+        try:
+            await bot.send_message(uid, text, parse_mode=ParseMode.HTML)
+        except TelegramError:
+            pass
+
+
+async def cb_payment_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    admin = update.effective_user
+    if not await require_owner(update):
+        return
+    payment_id = int(query.data.split(":")[2])
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM payments WHERE payment_id=?", (payment_id,))
+        payment = await cur.fetchone()
+        if not payment or payment["status"] != "pending":
+            await query.answer("⚠️ Already processed.", show_alert=True)
+            return
+        await db.execute(
+            "UPDATE payments SET status='accepted', admin_id=? WHERE payment_id=?",
+            (admin.id, payment_id),
+        )
+        await db.commit()
+
+    method_note = f"({payment['stars']} stars)" if payment["payment_method"] != "bdt" else f"(৳{payment['amount_bdt']})"
+    await add_coins(payment["user_id"], payment["coins"], "payment", f"Payment accepted {method_note}")
+    await query.answer("✅ Accepted")
+    try:
+        await query.message.delete()
+    except (BadRequest, TelegramError):
+        pass
+    try:
+        await context.bot.send_message(
+            payment["user_id"],
+            f"✅ <b>Payment Accepted!</b>\n🪙 {payment['coins']} Coins have been added to your wallet.",
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramError:
+        pass
+    await log_admin_action(context.bot, admin.id, f"✅ Accepted payment #{payment_id} for user {payment['user_id']} ({payment['coins']} coins)")
+
+
+async def cb_payment_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    admin = update.effective_user
+    if not await require_owner(update):
+        return
+    payment_id = int(query.data.split(":")[2])
+    context.user_data["reject_payment_id"] = payment_id
+    context.user_data["reject_chat_msg"] = (query.message.chat_id, query.message.message_id)
+    await query.answer()
+    await query.message.reply_text(
+        "✏️ Enter rejection reason (or send - to skip):"
+    )
+    context.user_data["awaiting_reject_reason"] = True
+
+
+async def handle_reject_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.get("awaiting_reject_reason"):
+        return
+    context.user_data["awaiting_reject_reason"] = False
+    reason = update.message.text.strip()
+    reason = "" if reason == "-" else reason
+    payment_id = context.user_data.pop("reject_payment_id")
+    reject_chat_msg = context.user_data.pop("reject_chat_msg", None)
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM payments WHERE payment_id=?", (payment_id,))
+        payment = await cur.fetchone()
+        if not payment or payment["status"] != "pending":
+            await update.message.reply_text("⚠️ Already processed.")
+            return
+        await db.execute(
+            "UPDATE payments SET status='rejected', admin_id=?, reason=? WHERE payment_id=?",
+            (update.effective_user.id, reason, payment_id),
+        )
+        await db.commit()
+
+    await update.message.reply_text("❌ Payment rejected and user notified.")
+    if reject_chat_msg:
+        try:
+            await context.bot.delete_message(chat_id=reject_chat_msg[0], message_id=reject_chat_msg[1])
+        except TelegramError:
+            pass
+    try:
+        msg = "❌ <b>Payment Rejected</b>"
+        if reason:
+            msg += f"\nReason: {html.escape(reason)}"
+        await context.bot.send_message(payment["user_id"], msg, parse_mode=ParseMode.HTML)
+    except TelegramError:
+        pass
+    await log_admin_action(
+        context.bot, update.effective_user.id,
+        f"❌ Rejected payment #{payment_id} for user {payment['user_id']}" + (f"\nReason: {html.escape(reason)}" if reason else "")
+    )
+
+
+
+async def handle_daily_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    user = update.effective_user
+    lock = await get_user_action_lock(user.id)
+    async with lock:
+        row = await get_user_row(user.id)
+        if row and row["last_bonus_time"]:
+            last = datetime.fromisoformat(row["last_bonus_time"])
+            elapsed = datetime.utcnow() - last
+            if elapsed < timedelta(hours=24):
+                remaining = timedelta(hours=24) - elapsed
+                h, rem = divmod(int(remaining.total_seconds()), 3600)
+                m = rem // 60
+                await update.effective_message.reply_text(
+                    f"⏳ <b>Daily Bonus Already Claimed</b>\nCome back in <b>{h}h {m}m</b>.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+
+        premium = await is_premium_active(user.id)
+        if premium:
+            reward = int(await get_setting("premium_daily_bonus", "40"))
+            tx_label = "Premium daily bonus claim"
+        else:
+            reward = int(await get_setting("daily_bonus", "25"))
+            tx_label = "Daily bonus claim"
+        await add_coins(user.id, reward, "daily_bonus", tx_label)
+        async with db_conn() as db:
+            await db.execute(
+                "UPDATE users SET last_bonus_time=? WHERE user_id=?",
+                (datetime.utcnow().isoformat(), user.id),
+            )
+            await db.commit()
+    badge = "\n👑 <i>Premium Daily Bonus</i>" if premium else ""
+    await update.effective_message.reply_text(
+        f"🎁 <b>Daily Bonus Claimed!</b>\n🪙 You received <b>{reward} Coins</b>.{badge}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+
+async def _spins_left(user_id: int) -> int:
+    row = await get_user_row(user_id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    used = row["spin_count_today"] if row and row["spin_reset_date"] == today else 0
+    limit = 2 if await is_premium_active(user_id) else 1
+    return max(0, limit - used)
+
+
+async def handle_daily_spin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    user = update.effective_user
+    left = await _spins_left(user.id)
+    limit = 2 if await is_premium_active(user.id) else 1
+    text = (
+        "🎰 <b>Daily Spin</b>\n"
+        f"{DIVIDER}\n"
+        f"🎁 Coins (small): <b>50%</b>\n"
+        f"💰 Coins (big): <b>25%</b>\n"
+        f"📁 Random File: <b>10%</b>\n"
+        f"👑 7-Day Premium: <b>15%</b>\n"
+        f"{DIVIDER}\n"
+        f"🔄 Spins left today: <b>{left}/{limit}</b>"
+    )
+    if left <= 0:
+        kb = None
+        text += "\n\n⏳ Come back tomorrow for more spins!"
+    else:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎰 SPIN NOW", callback_data="spin:go", style="success")]])
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_spin_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    lock = await get_user_action_lock(user.id)
+
+    async with lock:
+        left = await _spins_left(user.id)
+        if left <= 0:
+            await query.answer("⏳ No spins left today — come back tomorrow!", show_alert=True)
+            return
+        await query.answer()
+
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        row = await get_user_row(user.id)
+        used_today = row["spin_count_today"] if row and row["spin_reset_date"] == today else 0
+        async with db_conn() as db:
+            await db.execute(
+                "UPDATE users SET spin_count_today=?, spin_reset_date=? WHERE user_id=?",
+                (used_today + 1, today, user.id),
+            )
+            await db.commit()
+
+        symbols = ["🍒", "🍋", "🍇", "🍉", "🍊", "⭐", "💎", "7️⃣"]
+
+        def render_reels(reel, locked, caption):
+            row = "│".join(f"  {s}  " for s in reel)
+            marks = "".join(("🔒" if locked[i] else "  ") for i in range(3))
+            return (
+                f"🎰 <b>DAILY SPIN</b> 🎰\n{DIVIDER}\n\n"
+                f"   ┌─────┬─────┬─────┐\n"
+                f"   │{row}│\n"
+                f"   └─────┴─────┴─────┘\n"
+                f"     {marks}\n\n"
+                f"<i>{caption}</i>"
+            )
+
+        try:
+            await query.edit_message_text(
+                f"🎰 <b>DAILY SPIN</b> 🎰\n{DIVIDER}\n\n"
+                f"   ┌─────┬─────┬─────┐\n"
+                f"   │  ❔  │  ❔  │  ❔  │\n"
+                f"   └─────┴─────┴─────┘\n\n"
+                f"<i>🎲 Pulling the lever...</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except (BadRequest, TelegramError):
+            pass
+        await asyncio.sleep(0.5)
+
+        frame_count = 16
+        reel = [random.choice(symbols) for _ in range(3)]
+        locked = [False, False, False]
+
+        for i in range(frame_count):
+            progress = i / frame_count
+            if progress > 0.55:
+                locked[0] = True
+            if progress > 0.75:
+                locked[1] = True
+            if progress > 0.92:
+                locked[2] = True
+            for j in range(3):
+                if not locked[j]:
+                    reel[j] = random.choice(symbols)
+
+            if progress < 0.55:
+                caption = "🌀 Spinning" + "." * (1 + i % 3)
+            elif progress < 0.85:
+                caption = "⏳ Almost there..."
+            else:
+                caption = "🔥 Revealing..."
+
+            try:
+                await query.edit_message_text(render_reels(reel, locked, caption), parse_mode=ParseMode.HTML)
+            except (BadRequest, TelegramError):
+                pass
+            await asyncio.sleep(0.18 + (progress ** 2) * 0.4)
+
+        await asyncio.sleep(0.3)
+
+        cfg = json.loads(await get_setting("spin_settings", "{}"))
+        roll = random.uniform(0, 100)
+        luck = random.randint(1, 100)
+        c_low = cfg.get("chance_coins_low", 50)
+        c_high = cfg.get("chance_coins_high", 25)
+        c_file = cfg.get("chance_file", 10)
+
+        if roll < c_low:
+            win_symbol, category = "🍒", "coins_low"
+        elif roll < c_low + c_high:
+            win_symbol, category = "7️⃣", "coins_high"
+        elif roll < c_low + c_high + c_file:
+            win_symbol, category = "⭐", "file"
+        else:
+            win_symbol, category = "💎", "premium"
+
+        try:
+            await query.edit_message_text(
+                render_reels([win_symbol] * 3, [True, True, True], "🎉 <b>JACKPOT LOCKED IN!</b> 🎉"),
+                parse_mode=ParseMode.HTML,
+            )
+        except (BadRequest, TelegramError):
+            pass
+        await asyncio.sleep(0.6)
+
+        if category == "coins_low":
+            amount = random.randint(cfg.get("coins_low_min", 20), cfg.get("coins_low_max", 140))
+            await add_coins(user.id, amount, "daily_spin", f"Daily spin win: {amount} coins")
+            result = f"🪙 <b>You won {amount} Coins!</b>"
+        elif category == "coins_high":
+            amount = random.randint(cfg.get("coins_high_min", 150), cfg.get("coins_high_max", 300))
+            await add_coins(user.id, amount, "daily_spin", f"Daily spin win: {amount} coins")
+            result = f"💰 <b>Jackpot! You won {amount} Coins!</b>"
+        elif category == "file":
+            async with db_conn() as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute(
+                    "SELECT * FROM files WHERE is_deleted=0 AND price>0 ORDER BY RANDOM() LIMIT 1"
+                )
+                f = await cur.fetchone()
+                if not f:
+                    cur = await db.execute("SELECT * FROM files WHERE is_deleted=0 ORDER BY RANDOM() LIMIT 1")
+                    f = await cur.fetchone()
+            if f:
+                async with db_conn() as db:
+                    await db.execute(
+                        "INSERT INTO purchases (user_id, file_pk, price, timestamp) VALUES (?, ?, 0, ?)",
+                        (user.id, f["file_pk"], datetime.utcnow().isoformat()),
+                    )
+                    await db.commit()
+                result = f"📁 <b>You won a file!</b>\n{html.escape(f['file_name'])}"
+            else:
+                amount = random.randint(cfg.get("coins_low_min", 20), cfg.get("coins_low_max", 140))
+                await add_coins(user.id, amount, "daily_spin", "Daily spin fallback (no files available)")
+                result = f"🪙 <b>You won {amount} Coins!</b> (no files were available)"
+        else:
+            days = cfg.get("premium_days", 7)
+            await grant_premium(user.id, days, admin_id=0)
+            result = f"👑 <b>You won {days} Days of Premium!</b>"
+
+        final_text = (
+            f"🎊 <b>SPIN RESULT</b> 🎊\n{DIVIDER}\n\n"
+            f"   ┌─────┬─────┬─────┐\n"
+            f"   │  {win_symbol}  │  {win_symbol}  │  {win_symbol}  │\n"
+            f"   └─────┴─────┴─────┘\n\n"
+            f"{result}\n\n"
+            f"🍀 Your Luck: <b>{luck}%</b>\n{DIVIDER}"
+        )
+        try:
+            await query.edit_message_text(final_text, parse_mode=ParseMode.HTML)
+        except (BadRequest, TelegramError):
+            await query.message.reply_text(final_text, parse_mode=ParseMode.HTML)
+
+
+
+async def handle_mystery_box(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    pricing = json.loads(await get_setting("mystery_box_pricing", "[]"))
+    balance = await get_balance(update.effective_user.id)
+    lines = [f"🎁 <b>Mystery Box</b>\n{DIVIDER}", f"🪙 Your balance: <b>{balance}</b>\n"]
+    buttons = []
+    for p in pricing:
+        lines.append(f"{p['label']} — 🪙 {p['price']}")
+        buttons.append([InlineKeyboardButton(
+            f"{p['label']} ({p['price']} coins)", callback_data=f"mystery:open:{p['tier']}:{p['price']}", style="success"
+        )])
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def cb_mystery_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    _, _, tier, price = query.data.split(":")
+    price = int(price)
+    lock = await get_user_action_lock(user.id)
+
+    async with lock:
+        ok = await remove_coins(user.id, price, "mystery_box", f"Opened {tier} mystery box")
+        if not ok:
+            await query.answer("❌ Not enough coins.", show_alert=True)
+            return
+
+        async with db_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM files WHERE is_deleted=0 AND mystery_tier=? ORDER BY RANDOM() LIMIT 1", (tier,)
+            )
+            f = await cur.fetchone()
+
+        if not f:
+            await add_coins(user.id, price, "mystery_box_refund", f"No files available in {tier} tier — refunded")
+            await query.answer("😢 No files available in this box right now — refunded.", show_alert=True)
+            return
+
+        async with db_conn() as db:
+            await db.execute(
+                "INSERT INTO purchases (user_id, file_pk, price, timestamp) VALUES (?, ?, ?, ?)",
+                (user.id, f["file_pk"], price, datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+
+    await query.answer("🎉 You won a file!")
+    icon = FILE_TYPE_ICON.get(f["file_kind"], "📄")
+    await query.edit_message_text(
+        f"🎉 <b>Mystery Box Opened!</b>\n\n{icon} <b>{html.escape(f['file_name'])}</b>\n📦 {fmt_size(f['file_size'])}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬇ Download Now", callback_data=f"file:dl:{f['file_pk']}", style="success")]]),
+    )
+
+
+
+async def handle_invite_friends(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    user = update.effective_user
+    reward = await get_setting("referral_reward", "20")
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user.id,))
+        count = (await cur.fetchone())[0]
+    link = f"https://t.me/{BOT_USERNAME}?start={user.id}"
+    text = (
+        "🚀 <b>Invite Friends</b>\n\n"
+        f"Earn <b>{reward} Coins</b> for every friend who joins using your link!\n\n"
+        f"🔗 <code>{link}</code>\n\n"
+        f"👥 Total Referrals: <b>{count}</b>"
+    )
+    await update.effective_message.reply_text(
+        text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 My Referrals", callback_data="myrefs:0", style="primary")]]),
+    )
+
+
+async def cb_my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[1])
+    per_page = 10
+    user = update.effective_user
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT new_user_id, date, reward FROM referrals WHERE referrer_id=? ORDER BY date DESC LIMIT ? OFFSET ?",
+            (user.id, per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    if not rows and page == 0:
+        text = "👥 <b>My Referrals</b>\n\nYou haven't referred anyone yet."
+    else:
+        lines = ["👥 <b>My Referrals</b>\n"]
+        for r in rows:
+            u = await get_user_row(r["new_user_id"])
+            label = f"@{u['username']}" if u and u["username"] else (u["first_name"] if u else f"User {r['new_user_id']}")
+            lines.append(f"• {html.escape(label or '—')} — 🪙 +{r['reward']} <i>({fmt_date(r['date'])})</i>")
+        text = "\n".join(lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"myrefs:{page-1}", style="primary"))
+    if len(rows) == per_page:
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"myrefs:{page+1}", style="primary"))
+    kb = InlineKeyboardMarkup([nav]) if nav else None
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def handle_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT referrer_id, COUNT(*) as cnt FROM referrals GROUP BY referrer_id "
+            "ORDER BY cnt DESC LIMIT 10"
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await update.effective_message.reply_text("🏆 <b>Leaderboard</b>\n\nNo referrals yet.", parse_mode=ParseMode.HTML)
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = ["🏆 <b>Top 10 Referrals</b>\n"]
+    for i, r in enumerate(rows):
+        u = await get_user_row(r["referrer_id"])
+        name = html.escape(u["first_name"] or "Unknown") if u else "Unknown"
+        rank = medals[i] if i < 3 else f"{i+1}."
+        lines.append(f"{rank} {name} — <b>{r['cnt']}</b> referrals")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+
+async def handle_redeem_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Redeem a Code", callback_data="redeem:enter", style="primary")],
+        [InlineKeyboardButton("🎁 Convert Coins to Gift Code", callback_data="redeem:gift", style="primary")],
+    ])
+    await update.effective_message.reply_text(
+        "🎟️ <b>Redeem Center</b>\n\nWhat would you like to do?",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+async def cb_redeem_enter_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "🎟️ Please enter your redeem code:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="redeem:cancel", style="primary")]]),
+    )
+    return RD_CODE
+
+
+async def cb_redeem_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
+
+async def handle_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    code = update.message.text.strip().upper()
+    user = update.effective_user
+    lock = await get_user_action_lock(user.id)
+
+    async with lock:
+        async with db_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM redeems WHERE code=?", (code,))
+            redeem = await cur.fetchone()
+
+            admin = await is_admin(user.id)
+            if not redeem:
+                await update.message.reply_text("❌ Invalid Redeem Code.", reply_markup=user_reply_keyboard(admin))
+                return ConversationHandler.END
+
+            if redeem["status"] != "active":
+                await update.message.reply_text("❌ This code is no longer active.", reply_markup=user_reply_keyboard(admin))
+                return ConversationHandler.END
+
+            if redeem["expiry_date"]:
+                try:
+                    if datetime.fromisoformat(redeem["expiry_date"]) < datetime.utcnow():
+                        await db.execute("UPDATE redeems SET status='expired' WHERE code=?", (code,))
+                        await db.commit()
+                        await update.message.reply_text("❌ This code has expired.", reply_markup=user_reply_keyboard(admin))
+                        return ConversationHandler.END
+                except ValueError:
+                    pass
+
+            if redeem["usage_limit"] and redeem["used_count"] >= redeem["usage_limit"]:
+                await update.message.reply_text("❌ This code has reached its usage limit.", reply_markup=user_reply_keyboard(admin))
+                return ConversationHandler.END
+
+            cur = await db.execute(
+                "SELECT 1 FROM redeem_uses WHERE code=? AND user_id=?", (code, user.id)
+            )
+            if await cur.fetchone():
+                await update.message.reply_text("❌ You have already redeemed this code.", reply_markup=user_reply_keyboard(admin))
+                return ConversationHandler.END
+
+            await db.execute(
+                "INSERT INTO redeem_uses (code, user_id, timestamp) VALUES (?, ?, ?)",
+                (code, user.id, datetime.utcnow().isoformat()),
+            )
+            await db.execute("UPDATE redeems SET used_count = used_count + 1 WHERE code=?", (code,))
+            await db.commit()
+
+        if redeem["coin_reward"]:
+            await add_coins(user.id, redeem["coin_reward"], "redeem", f"Redeem code {code}")
+        if redeem["premium_days"]:
+            await grant_premium(user.id, redeem["premium_days"], admin_id=0)
+
+    msg = f"✅ <b>Redeem Successful!</b>\n🪙 +{redeem['coin_reward']} Coins"
+    if redeem["premium_days"]:
+        msg += f"\n⭐ +{redeem['premium_days']} Days Premium"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=user_reply_keyboard(admin))
+    return ConversationHandler.END
+
+
+
+def _generate_gift_code() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "GIFT" + "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+async def cb_redeem_gift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    balance = await get_balance(update.effective_user.id)
+    await query.message.reply_text(
+        f"🎁 <b>Convert Coins to Gift Code</b>\n\n"
+        f"🪙 Your balance: <b>{balance}</b>\n\n"
+        "Enter how many coins to convert into a one-time gift code "
+        "(you can share it with anyone — they redeem it once for that many coins):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="redeem:cancel", style="primary")]]),
+    )
+    return GC_AMOUNT
+
+
+async def conv_gift_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ Please enter a valid positive number of coins.")
+        return GC_AMOUNT
+    amount = int(text)
+    user = update.effective_user
+    lock = await get_user_action_lock(user.id)
+
+    async with lock:
+        ok = await remove_coins(user.id, amount, "gift_code_created", f"Converted {amount} coins to a gift code")
+        if not ok:
+            await update.message.reply_text("❌ You don't have enough coins for that.")
+            return ConversationHandler.END
+
+        code = _generate_gift_code()
+        async with db_conn() as db:
+            for _ in range(5):
+                cur = await db.execute("SELECT 1 FROM redeems WHERE code=?", (code,))
+                if not await cur.fetchone():
+                    break
+                code = _generate_gift_code()
+            await db.execute(
+                "INSERT INTO redeems (code, coin_reward, premium_days, usage_limit, status, created_by, created_at, source) "
+                "VALUES (?, ?, 0, 1, 'active', ?, ?, 'user')",
+                (code, amount, user.id, datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+
+    await update.message.reply_text(
+        f"✅ <b>Gift Code Created!</b>\n\n🎟 Code: <code>{code}</code>\n🪙 Value: <b>{amount} Coins</b>\n\n"
+        "Share this code with anyone — they can redeem it once via 🎟️ Redeem Code → Redeem a Code.",
+        parse_mode=ParseMode.HTML,
+    )
+    return ConversationHandler.END
+
+
+
+async def handle_my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    user = update.effective_user
+    row = await get_user_row(user.id)
+    balance = await get_balance(user.id)
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM purchases WHERE user_id=?", (user.id,))
+        purchased = (await cur.fetchone())[0]
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user.id,))
+        refs = (await cur.fetchone())[0]
+        cur = await db.execute("SELECT COUNT(*) FROM redeem_uses WHERE user_id=?", (user.id,))
+        redeems = (await cur.fetchone())[0]
+
+    is_premium = await is_premium_active(user.id)
+    premium_line = "👑 <b>Premium — Active</b>" if is_premium else "⭐ Premium: <i>Not Active</i>"
+    text = (
+        "📊 <b>My Stats</b>\n"
+        f"{DIVIDER}\n"
+        f"👤 <b>User ID:</b> <code>{user.id}</code>\n"
+        f"📅 <b>Join Date:</b> {fmt_date(row['join_date']) if row else '—'}\n"
+        f"🪙 <b>Coins:</b> {balance}\n"
+        f"📁 <b>Purchased Files:</b> {purchased}\n"
+        f"👥 <b>Referrals:</b> {refs}\n"
+        f"🎁 <b>Redeem Count:</b> {redeems}\n"
+        f"{premium_line}\n"
+        f"{DIVIDER}"
+    )
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+
+async def handle_buy_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await guard_user(update, context):
+        return
+    await send_file_list(update, context, page=0)
+
+
+async def send_file_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, edit: bool = False) -> None:
+    per_page = 8
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT file_pk, file_name, price FROM files WHERE is_deleted=0 "
+            "ORDER BY file_pk DESC LIMIT ? OFFSET ?",
+            (per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        text = "📁 <b>Buy Files</b>\n\nNo files available right now."
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📁 My Purchases", callback_data="purchases:0", style="primary")]])
+    else:
+        text = "📁 <b>Buy Files</b>\n\nSelect a file to view details:"
+        buttons = []
+        for r in rows:
+            tag = "🟢 FREE" if r["price"] == 0 else f"🪙 {r['price']}"
+            buttons.append([InlineKeyboardButton(f"📄 {r['file_name']} — {tag}", callback_data=f"file:view:{r['file_pk']}", style="primary")])
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"files:list:{page-1}", style="primary"))
+        if len(rows) == per_page:
+            nav.append(InlineKeyboardButton("Next ➡", callback_data=f"files:list:{page+1}", style="primary"))
+        if nav:
+            buttons.append(nav)
+        buttons.append([InlineKeyboardButton("📁 My Purchases", callback_data="purchases:0", style="primary")])
+        kb = InlineKeyboardMarkup(buttons)
+
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_files_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[2])
+    await send_file_list(update, context, page, edit=True)
+
+
+async def cb_file_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    file_pk = int(query.data.split(":")[2])
+    user = update.effective_user
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM files WHERE file_pk=? AND is_deleted=0", (file_pk,))
+        f = await cur.fetchone()
+        if not f:
+            await query.answer("❌ File not found.", show_alert=True)
+            return
+        cur = await db.execute(
+            "SELECT 1 FROM purchases WHERE user_id=? AND file_pk=?", (user.id, file_pk)
+        )
+        owned = bool(await cur.fetchone())
+
+    await query.answer()
+    icon = FILE_TYPE_ICON.get(f["file_kind"], "📄")
+    text = (
+        f"{icon} <b>{html.escape(f['file_name'])}</b>\n\n"
+        f"📦 Size: <b>{fmt_size(f['file_size'])}</b>\n"
+        f"📄 Description: {html.escape(f['description']) if f['description'] else '—'}\n"
+    )
+    if f["price"] == 0 or owned:
+        text += "\n🟢 <b>FREE</b>" if f["price"] == 0 and not owned else "\n✅ <b>You own this file</b>"
+        buttons = [[InlineKeyboardButton("⬇ Download", callback_data=f"file:dl:{file_pk}", style="primary")]]
+    else:
+        text += f"\n🪙 <b>{f['price']} Coins</b>"
+        buttons = [[InlineKeyboardButton("🛒 Buy Now", callback_data=f"file:buy:{file_pk}", style="primary")]]
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="files:list:0", style="primary")])
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_file_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    file_pk = int(query.data.split(":")[2])
+    user = update.effective_user
+    lock = await get_user_action_lock(user.id)
+    async with lock:
+        async with db_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM files WHERE file_pk=? AND is_deleted=0", (file_pk,))
+            f = await cur.fetchone()
+            if not f:
+                await query.answer("❌ File not found.", show_alert=True)
+                return
+            cur = await db.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_pk=?", (user.id, file_pk))
+            if await cur.fetchone():
+                await query.answer("✅ You already own this file.", show_alert=True)
+                return
+
+        if f["price"] > 0:
+            ok = await remove_coins(user.id, f["price"], "purchase", f"Purchased file: {f['file_name']}")
+            if not ok:
+                await query.answer("❌ Not enough Coins.", show_alert=True)
+                await query.edit_message_text(
+                    "❌ <b>Not enough Coins.</b>\n\nPlease top up your wallet to continue.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Open Wallet", callback_data="wallet:home", style="primary")]]),
+                )
+                return
+
+        async with db_conn() as db:
+            await db.execute(
+                "INSERT INTO purchases (user_id, file_pk, price, timestamp) VALUES (?, ?, ?, ?)",
+                (user.id, file_pk, f["price"], datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+
+    await query.answer("✅ Purchased!")
+    await query.edit_message_text(
+        f"✅ <b>Purchase Successful!</b>\n\nYou now own <b>{html.escape(f['file_name'])}</b> forever.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬇ Download Now", callback_data=f"file:dl:{file_pk}", style="primary")]]),
+    )
+
+
+async def cb_file_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    file_pk = int(query.data.split(":")[2])
+    user = update.effective_user
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM files WHERE file_pk=? AND is_deleted=0", (file_pk,))
+        f = await cur.fetchone()
+        if not f:
+            await query.answer("❌ File not found.", show_alert=True)
+            return
+        if f["price"] > 0:
+            cur = await db.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_pk=?", (user.id, file_pk))
+            if not await cur.fetchone():
+                await query.answer("❌ You need to purchase this file first.", show_alert=True)
+                return
+
+    await query.answer("⬇ Sending file...")
+    try:
+        await context.bot.send_document(
+            chat_id=user.id, document=f["tg_file_id"], caption=f"📄 {html.escape(f['file_name'])}", parse_mode=ParseMode.HTML
+        )
+    except (BadRequest, TelegramError):
+        try:
+            await context.bot.send_message(user.id, "⚠️ Could not deliver file, please contact support.")
+        except TelegramError:
+            pass
+        return
+
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO downloads (user_id, file_pk, timestamp) VALUES (?, ?, ?)",
+            (user.id, file_pk, datetime.utcnow().isoformat()),
+        )
+        await db.execute("UPDATE files SET downloads_count = downloads_count + 1 WHERE file_pk=?", (file_pk,))
+        await db.commit()
+
+
+async def cb_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[1])
+    per_page = 8
+    user = update.effective_user
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT p.*, f.file_name FROM purchases p JOIN files f ON p.file_pk=f.file_pk "
+            "WHERE p.user_id=? ORDER BY p.id DESC LIMIT ? OFFSET ?",
+            (user.id, per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        text = "📁 <b>My Purchases</b>\n\nYou haven't purchased any files yet."
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data="files:list:0", style="primary")]])
+    else:
+        text = "📁 <b>My Purchases</b>\n\n"
+        buttons = []
+        for r in rows:
+            buttons.append([InlineKeyboardButton(f"⬇ {r['file_name']}", callback_data=f"file:dl:{r['file_pk']}", style="primary")])
+        buttons.append([InlineKeyboardButton("⬅ Back", callback_data="files:list:0", style="primary")])
+        kb = InlineKeyboardMarkup(buttons)
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+
+async def cb_admin_upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return ConversationHandler.END
+    if update.callback_query:
+        await update.callback_query.answer()
+    await update.effective_message.reply_text(
+        "📤 <b>Upload File</b>\n\nSend me the file you want to add to the store.",
+        parse_mode=ParseMode.HTML,
+    )
+    return UP_FILE
+
+
+async def conv_upload_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    kind = None
+    tg_file = None
+    file_name = None
+    file_size = 0
+
+    if msg.document:
+        kind, tg_file = "document", msg.document
+        file_name, file_size = tg_file.file_name or "file", tg_file.file_size or 0
+    elif msg.video:
+        kind, tg_file = "video", msg.video
+        file_name = tg_file.file_name or f"video_{tg_file.file_unique_id}.mp4"
+        file_size = tg_file.file_size or 0
+    elif msg.audio:
+        kind, tg_file = "audio", msg.audio
+        file_name = tg_file.file_name or f"audio_{tg_file.file_unique_id}.mp3"
+        file_size = tg_file.file_size or 0
+    elif msg.photo:
+        tg_file = msg.photo[-1]
+        kind = "photo"
+        file_name = f"photo_{tg_file.file_unique_id}.jpg"
+        file_size = tg_file.file_size or 0
+    elif msg.voice:
+        kind, tg_file = "voice", msg.voice
+        file_name = f"voice_{tg_file.file_unique_id}.ogg"
+        file_size = tg_file.file_size or 0
+    elif msg.animation:
+        kind, tg_file = "animation", msg.animation
+        file_name = tg_file.file_name or f"gif_{tg_file.file_unique_id}.mp4"
+        file_size = tg_file.file_size or 0
+    else:
+        await msg.reply_text("❌ Unsupported file type. Please send a valid file.")
+        return UP_FILE
+
+    context.user_data["up_kind"] = kind
+    context.user_data["up_file_id"] = tg_file.file_id
+    context.user_data["up_unique_id"] = tg_file.file_unique_id
+    context.user_data["up_orig_name"] = file_name
+    context.user_data["up_size"] = file_size
+
+    await msg.reply_text(
+        f"✅ File received ({fmt_size(file_size)}).\n\n📝 Enter File Name (or send - to use original filename):"
+    )
+    return UP_NAME
+
+
+async def conv_upload_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    name = context.user_data["up_orig_name"] if text == "-" else text
+    context.user_data["up_name"] = name
+    await update.message.reply_text("📄 Enter Description (or send - to skip):")
+    return UP_DESC
+
+
+async def conv_upload_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    context.user_data["up_desc"] = "" if text == "-" else text
+    await update.message.reply_text("💰 Enter Coin Price (0 = FREE):\n\nExample: 0, 50, 100, 250, 500, 1000")
+    return UP_PRICE
+
+
+async def conv_upload_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("❌ Please enter a valid number.")
+        return UP_PRICE
+    context.user_data["up_price"] = int(text)
+    return await show_upload_preview(update, context)
+
+
+async def show_upload_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    d = context.user_data
+    text = (
+        "👀 <b>Preview</b>\n\n"
+        f"📁 File Name: {html.escape(d['up_name'])}\n"
+        f"📦 File Size: {fmt_size(d['up_size'])}\n"
+        f"📄 Description: {html.escape(d['up_desc']) if d['up_desc'] else '—'}\n"
+        f"💰 Coin Price: {d['up_price']}\n"
+        f"📅 Upload Date: {fmt_date(datetime.utcnow().isoformat())}"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Publish", callback_data="up:publish", style="primary"),
+         InlineKeyboardButton("✏ Edit", callback_data="up:edit", style="primary")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="up:cancel", style="primary")],
+    ])
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    return UP_PREVIEW
+
+
+async def cb_upload_publish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    d = context.user_data
+    user = update.effective_user
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO files (tg_file_id, tg_file_unique_id, file_kind, file_name, file_size, "
+            "description, price, upload_date, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (d["up_file_id"], d["up_unique_id"], d["up_kind"], d["up_name"], d["up_size"],
+             d["up_desc"], d["up_price"], datetime.utcnow().isoformat(), user.id),
+        )
+        await db.commit()
+    await query.edit_message_text("✅ <b>File Published Successfully!</b>", parse_mode=ParseMode.HTML)
+    for key in ["up_kind", "up_file_id", "up_unique_id", "up_orig_name", "up_size", "up_name", "up_desc", "up_price"]:
+        context.user_data.pop(key, None)
+    return ConversationHandler.END
+
+
+async def cb_upload_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("📝 Enter File Name (or send - to use original filename):")
+    return UP_NAME
+
+
+async def cb_upload_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ Upload cancelled.")
+    for key in ["up_kind", "up_file_id", "up_unique_id", "up_orig_name", "up_size", "up_name", "up_desc", "up_price"]:
+        context.user_data.pop(key, None)
+    return ConversationHandler.END
+
+
+
+async def cb_admin_managefiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await send_manage_files_list(update, context, page=0)
+
+
+async def send_manage_files_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    viewer_id = update.effective_user.id
+    is_owner = viewer_id == OWNER_ID
+    per_page = 8
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        if is_owner:
+            cur = await db.execute(
+                "SELECT file_pk, file_name, price, downloads_count FROM files WHERE is_deleted=0 "
+                "ORDER BY file_pk DESC LIMIT ? OFFSET ?",
+                (per_page, page * per_page),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT file_pk, file_name, price, downloads_count FROM files WHERE is_deleted=0 AND uploaded_by=? "
+                "ORDER BY file_pk DESC LIMIT ? OFFSET ?",
+                (viewer_id, per_page, page * per_page),
+            )
+        rows = await cur.fetchall()
+
+    text = "📂 <b>Manage Files</b>\n\n"
+    text += "Select a file to edit or delete:" if is_owner else "Files you've uploaded — select one to edit or delete:"
+    buttons = []
+    for r in rows:
+        buttons.append([InlineKeyboardButton(
+            f"📄 {r['file_name']} ({r['downloads_count']}⬇)", callback_data=f"mf:view:{r['file_pk']}:{page}"
+        , style="primary")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"mf:list:{page-1}", style="primary"))
+    if len(rows) == per_page:
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"mf:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("🔍 Search Files", callback_data="mf:searchstart", style="primary")])
+    buttons.append([InlineKeyboardButton("⬅ Back to Admin Panel", callback_data="ad:home", style="primary")])
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_mf_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[2])
+    await send_manage_files_list(update, context, page)
+
+
+async def cb_mf_search_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("🔍 Enter a keyword to search your files by name:")
+    return MF_SEARCH
+
+
+async def conv_mf_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyword = update.message.text.strip()
+    viewer_id = update.effective_user.id
+    is_owner = viewer_id == OWNER_ID
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        if is_owner:
+            cur = await db.execute(
+                "SELECT file_pk, file_name FROM files WHERE is_deleted=0 AND file_name LIKE ? LIMIT 15",
+                (f"%{keyword}%",),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT file_pk, file_name FROM files WHERE is_deleted=0 AND uploaded_by=? AND file_name LIKE ? LIMIT 15",
+                (viewer_id, f"%{keyword}%"),
+            )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await update.message.reply_text("❌ No files matched that keyword.")
+        return ConversationHandler.END
+
+    buttons = [[InlineKeyboardButton(f"📄 {r['file_name']}", callback_data=f"mf:view:{r['file_pk']}:0", style="primary")] for r in rows]
+    await update.message.reply_text(
+        f"🔍 Found <b>{len(rows)}</b> matching file(s):", parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+    return ConversationHandler.END
+
+
+async def cb_mf_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, _, file_pk, page = query.data.split(":")
+    await _render_mf_view(update, int(file_pk), int(page))
+
+
+async def _render_mf_view(update: Update, file_pk: int, page: int) -> None:
+    query = update.callback_query
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM files WHERE file_pk=?", (file_pk,))
+        f = await cur.fetchone()
+    if not f:
+        await query.edit_message_text("❌ File not found.")
+        return
+    if update.effective_user.id != OWNER_ID and f["uploaded_by"] != update.effective_user.id:
+        await query.edit_message_text("🚫 You can only manage files you uploaded.")
+        return
+    text = (
+        f"📄 <b>{html.escape(f['file_name'])}</b>\n\n"
+        f"📦 Size: {fmt_size(f['file_size'])}\n"
+        f"📄 Description: {html.escape(f['description']) if f['description'] else '—'}\n"
+        f"💰 Price: {f['price']} coins\n"
+        f"⬇ Downloads: {f['downloads_count']}\n"
+        f"🎁 Mystery Tier: {f['mystery_tier'] or 'None'}\n"
+        f"📌 Featured: {'Yes' if f['featured'] else 'No'}\n"
+        f"📅 Uploaded: {fmt_date(f['upload_date'])}"
+    )
+    feature_label = "📌 Unfeature" if f["featured"] else "📌 Make Featured"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Edit Name", callback_data=f"mf:ename:{file_pk}", style="primary"),
+         InlineKeyboardButton("✏️ Edit Desc", callback_data=f"mf:edesc:{file_pk}", style="primary")],
+        [InlineKeyboardButton("✏️ Edit Price", callback_data=f"mf:eprice:{file_pk}", style="primary"),
+         InlineKeyboardButton("🎁 Set Mystery Tier", callback_data=f"mf:etier:{file_pk}", style="primary")],
+        [InlineKeyboardButton(feature_label, callback_data=f"mf:tfeat:{file_pk}:{page}", style="primary")],
+        [InlineKeyboardButton("🗑 Delete File", callback_data=f"mf:delete:{file_pk}", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data=f"mf:list:{page}", style="primary")],
+    ])
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_mf_toggle_featured(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    _, _, file_pk, page = query.data.split(":")
+    file_pk = int(file_pk)
+    if not await _can_manage_file(update.effective_user.id, file_pk):
+        await query.answer("🚫 You can only manage files you uploaded.", show_alert=True)
+        return
+    async with db_conn() as db:
+        cur = await db.execute("SELECT featured FROM files WHERE file_pk=?", (file_pk,))
+        row = await cur.fetchone()
+        new_val = 0 if (row and row[0]) else 1
+        await db.execute("UPDATE files SET featured=? WHERE file_pk=?", (new_val, file_pk))
+        await db.commit()
+    await query.answer("📌 Featured!" if new_val else "Unfeatured")
+    await _render_mf_view(update, file_pk, int(page))
+
+
+async def _can_manage_file(user_id: int, file_pk: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    async with db_conn() as db:
+        cur = await db.execute("SELECT uploaded_by FROM files WHERE file_pk=?", (file_pk,))
+        row = await cur.fetchone()
+        return bool(row and row[0] == user_id)
+
+
+async def cb_mf_edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    _, field, file_pk = query.data.split(":")
+    file_pk = int(file_pk)
+    if not await _can_manage_file(update.effective_user.id, file_pk):
+        await query.answer("🚫 You can only manage files you uploaded.", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    context.user_data["ef_file_pk"] = file_pk
+    context.user_data["ef_field"] = field
+    prompts = {
+        "ename": "📝 Enter new File Name:",
+        "edesc": "📄 Enter new Description:",
+        "eprice": "💰 Enter new Coin Price:",
+        "etier": "🎁 Enter Mystery Tier — <code>random</code>, <code>rare</code>, <code>premium</code>, or <code>none</code>:",
+    }
+    await query.message.reply_text(prompts[field], parse_mode=ParseMode.HTML)
+    return EF_FIELD
+
+
+async def conv_edit_field_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    field = context.user_data.pop("ef_field")
+    file_pk = context.user_data.pop("ef_file_pk")
+    value = update.message.text.strip()
+
+    column_map = {"ename": "file_name", "edesc": "description", "eprice": "price", "etier": "mystery_tier"}
+    column = column_map[field]
+
+    if field == "eprice":
+        if not value.isdigit():
+            await update.message.reply_text("❌ Please enter a valid number.")
+            context.user_data["ef_field"] = field
+            context.user_data["ef_file_pk"] = file_pk
+            return EF_FIELD
+        value = int(value)
+    elif field == "etier":
+        value = value.lower()
+        if value not in ("random", "rare", "premium", "none"):
+            await update.message.reply_text("❌ Must be one of: random, rare, premium, none.")
+            context.user_data["ef_field"] = field
+            context.user_data["ef_file_pk"] = file_pk
+            return EF_FIELD
+        value = None if value == "none" else value
+
+    async with db_conn() as db:
+        await db.execute(f"UPDATE files SET {column}=? WHERE file_pk=?", (value, file_pk))
+        await db.commit()
+
+    await update.message.reply_text("✅ File updated successfully.")
+    return ConversationHandler.END
+
+
+async def cb_mf_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    file_pk = int(query.data.split(":")[2])
+    if not await _can_manage_file(update.effective_user.id, file_pk):
+        await query.answer("🚫 You can only manage files you uploaded.", show_alert=True)
+        return
+    await query.answer()
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"mf:delconfirm:{file_pk}", style="primary"),
+         InlineKeyboardButton("❌ No", callback_data=f"mf:view:{file_pk}:0", style="primary")],
+    ])
+    await query.edit_message_text("⚠️ Are you sure you want to delete this file?", reply_markup=kb)
+
+
+async def cb_mf_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    file_pk = int(query.data.split(":")[2])
+    if not await _can_manage_file(update.effective_user.id, file_pk):
+        await query.answer("🚫 You can only manage files you uploaded.", show_alert=True)
+        return
+    async with db_conn() as db:
+        await db.execute("UPDATE files SET is_deleted=1 WHERE file_pk=?", (file_pk,))
+        await db.commit()
+    await query.answer("🗑 Deleted")
+    await query.edit_message_text("🗑 <b>File deleted successfully.</b>", parse_mode=ParseMode.HTML)
+
+
+
+async def cb_admin_fcmgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update):
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Channel", callback_data="fc:add", style="primary"),
+         InlineKeyboardButton("➖ Remove Channel", callback_data="fc:remove", style="primary")],
+        [InlineKeyboardButton("📋 Channel List", callback_data="fc:list", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")],
+    ])
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("📡 <b>Force Channel Manager</b>", parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text("📡 <b>Force Channel Manager</b>", parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_fc_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await require_owner(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "➕ <b>Add Force-Join Channel/Group</b>\n\n"
+        "Send either:\n"
+        "• A public <b>@username</b>\n"
+        "• Or a <b>https://t.me/username</b> link\n\n"
+        "I need to already be a <b>member</b> of it — admin rights aren't required.",
+        parse_mode=ParseMode.HTML,
+    )
+    return FC_ADD
+
+
+async def conv_fc_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    try:
+        text = (msg.text or "").strip()
+        username = None
+
+        if text.startswith("@") and re.match(r"^@[A-Za-z0-9_]{5,32}$", text):
+            username = text
+        else:
+            m = re.match(r"^https?://t\.me/([A-Za-z0-9_]{5,32})/?$", text)
+            if m:
+                username = f"@{m.group(1)}"
+
+        if not username:
+            await msg.reply_text("❌ Please send a valid @username or a https://t.me/username link.")
+            return FC_ADD
+
+        try:
+            chat = await context.bot.get_chat(username)
+        except TelegramError as e:
+            await msg.reply_text(
+                f"❌ Couldn't find that channel/group ({html.escape(str(e))}).\n"
+                "Make sure the username is correct and I've already been added to it.",
+                parse_mode=ParseMode.HTML,
+            )
+            return FC_ADD
+
+        try:
+            me = await context.bot.get_me()
+            member = await context.bot.get_chat_member(chat.id, me.id)
+            if member.status in ("left", "kicked"):
+                await msg.reply_text("❌ I'm not currently a member of that chat. Please add me first, then try again.")
+                return FC_ADD
+        except TelegramError as e:
+            await msg.reply_text(
+                f"❌ I can't access that chat's member list ({html.escape(str(e))}).\n"
+                "Please make sure I've been added to it.",
+                parse_mode=ParseMode.HTML,
+            )
+            return FC_ADD
+
+        resolved_username = f"@{chat.username}" if chat.username else username
+        await _save_force_channel(chat.id, resolved_username, chat.title, str(chat.type))
+        await msg.reply_text(f"✅ Added: <b>{html.escape(chat.title)}</b>", parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+
+    except Exception as e:
+        log.exception("Unexpected error in conv_fc_add")
+        await msg.reply_text(
+            f"⚠️ <b>Something went wrong adding this channel.</b>\n<code>{html.escape(str(e))}</code>\n\n"
+            "This has been logged — please share this exact message so it can be fixed.",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
+
+
+async def _save_force_channel(chat_id: int, username: str, title: str, chat_type: str) -> None:
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO force_channels (username, chat_id, title, chat_type, added_date) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(username) DO UPDATE SET "
+            "chat_id=excluded.chat_id, title=excluded.title, chat_type=excluded.chat_type",
+            (username, chat_id, title, chat_type, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+
+async def cb_fc_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    channels = await list_force_channels()
+    if not channels:
+        text = "📋 <b>Channel List</b>\n\nNo channels added yet."
+    else:
+        lines = ["📋 <b>Channel List</b>\n"]
+        for ch in channels:
+            lines.append(f"• <b>{html.escape(ch['title'])}</b> — added {fmt_date(ch['added_date'])}")
+        text = "\n".join(lines)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button("ad:fcmgr"))
+
+
+async def cb_fc_remove_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    channels = await list_force_channels()
+    if not channels:
+        await query.edit_message_text("No channels to remove.", reply_markup=back_button("ad:fcmgr"))
+        return
+    buttons = [[InlineKeyboardButton(f"➖ {ch['title']}", callback_data=f"fc:rm:{ch['id']}", style="primary")] for ch in channels]
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:fcmgr", style="primary")])
+    await query.edit_message_text("➖ Select a channel to remove:", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_fc_remove_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    ch_id = int(query.data.split(":")[2])
+    async with db_conn() as db:
+        await db.execute("DELETE FROM force_channels WHERE id=?", (ch_id,))
+        await db.commit()
+    await query.answer("➖ Removed")
+    await cb_fc_remove_menu(update, context)
+
+
+
+async def cb_admin_walletmgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    is_owner = update.effective_user.id == OWNER_ID
+    rows = [
+        [InlineKeyboardButton("➕ Add Coins", callback_data="wm:add", style="primary"),
+         InlineKeyboardButton("➖ Remove Coins", callback_data="wm:remove", style="primary")],
+        [InlineKeyboardButton("♻ Reset Coins", callback_data="wm:reset", style="primary")],
+    ]
+    if is_owner:
+        rows.append([InlineKeyboardButton("🎯 Set Exact Balance", callback_data="wm:setbal", style="primary")])
+        rows.append([InlineKeyboardButton("👥 Bulk Manage Users", callback_data="wm:bulk", style="primary")])
+        rows.append([InlineKeyboardButton("📋 Pending Payments", callback_data="pp:list:0", style="primary")])
+    rows.append([InlineKeyboardButton("📜 Wallet History", callback_data="wm:history", style="primary")])
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")])
+    kb = InlineKeyboardMarkup(rows)
+    text = "💰 <b>Wallet Manager</b>\n\nEnter a User ID to manage their wallet, or view recent history."
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_wm_action_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    action = query.data.split(":")[1]
+    if action == "setbal" and not await require_owner(update):
+        return ConversationHandler.END
+    await query.answer()
+    context.user_data["wm_action"] = action
+    await query.message.reply_text("👤 Enter the target User ID:")
+    return UM_SEARCH
+
+
+async def conv_wm_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("❌ Please send a valid numeric User ID.")
+        return UM_SEARCH
+    target_id = int(text)
+    row = await get_user_row(target_id)
+    if not row:
+        await update.message.reply_text("❌ User not found.")
+        return ConversationHandler.END
+    context.user_data["wm_target"] = target_id
+    action = context.user_data["wm_action"]
+    if action == "reset":
+        async with db_conn() as db:
+            await db.execute("UPDATE wallet SET coins=0 WHERE user_id=?", (target_id,))
+            await db.execute(
+                "INSERT INTO transactions (user_id, tx_type, amount, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (target_id, "admin_reset", 0, "Admin reset wallet to 0", datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+        await update.message.reply_text(f"♻ Wallet reset to 0 for user {target_id}.")
+        await log_admin_action(context.bot, update.effective_user.id, f"♻ Reset wallet to 0 for user {target_id}")
+        return ConversationHandler.END
+
+    if action == "setbal":
+        await update.message.reply_text("🎯 Enter the exact balance to set:")
+        return UM_AMOUNT
+
+    await update.message.reply_text("🪙 Enter the amount:")
+    return UM_AMOUNT
+
+
+async def conv_wm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    action = context.user_data.get("wm_action")
+    min_ok = 0 if action == "setbal" else 1
+    if not text.isdigit() or int(text) < min_ok:
+        await update.message.reply_text("❌ Please enter a valid number." if action == "setbal" else "❌ Please enter a valid positive number.")
+        return UM_AMOUNT
+    amount = int(text)
+    target_id = context.user_data.pop("wm_target")
+    action = context.user_data.pop("wm_action")
+
+    if action == "setbal":
+        async with db_conn() as db:
+            await db.execute(
+                "INSERT INTO wallet (user_id, coins) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET coins=excluded.coins",
+                (target_id, amount),
+            )
+            await db.execute(
+                "INSERT INTO transactions (user_id, tx_type, amount, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (target_id, "admin_setbal", amount, f"Admin set exact balance to {amount}", datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+        await update.message.reply_text(f"🎯 Balance for user {target_id} set to {amount} coins.")
+        await log_admin_action(context.bot, update.effective_user.id, f"🎯 Set exact balance for user {target_id} to {amount} coins")
+        return ConversationHandler.END
+
+    if action == "add":
+        new_bal = await add_coins(target_id, amount, "admin_gift", f"Admin added {amount} coins")
+        await update.message.reply_text(f"✅ Added {amount} coins. New balance: {new_bal}")
+        await log_admin_action(context.bot, update.effective_user.id, f"➕ Added {amount} coins to user {target_id}")
+        try:
+            await context.bot.send_message(target_id, f"🎁 <b>{amount} Coins</b> have been added to your wallet by admin!", parse_mode=ParseMode.HTML)
+        except TelegramError:
+            pass
+    else:
+        ok = await remove_coins(target_id, amount, "admin_deduct", f"Admin removed {amount} coins")
+        if ok:
+            await update.message.reply_text(f"✅ Removed {amount} coins.")
+            await log_admin_action(context.bot, update.effective_user.id, f"➖ Removed {amount} coins from user {target_id}")
+        else:
+            await update.message.reply_text("❌ User doesn't have enough coins to remove that amount.")
+    return ConversationHandler.END
+
+
+async def cb_wm_bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await require_owner(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "👥 <b>Bulk Manage Users</b>\n\n"
+        "Send the target users separated by space, comma, or a new line — "
+        "numeric User IDs, @usernames, or a mix of both:\n"
+        "<code>111 222 @alice @bob</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    return WB_IDS
+
+
+async def conv_wm_bulk_ids(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    tokens = [tok for tok in re.split(r"[\s,]+", raw) if tok]
+    if not tokens:
+        await update.message.reply_text("❌ Please send at least one User ID or @username.")
+        return WB_IDS
+
+    resolved: list[int] = []
+    not_found: list[str] = []
+
+    async with db_conn() as db:
+        for tok in tokens:
+            if tok.startswith("@"):
+                uname = tok.lstrip("@")
+                cur = await db.execute("SELECT user_id FROM users WHERE username=?", (uname,))
+                row = await cur.fetchone()
+                if row:
+                    resolved.append(row[0])
+                else:
+                    not_found.append(tok)
+            elif tok.isdigit():
+                resolved.append(int(tok))
+            else:
+                not_found.append(tok)
+
+    if not resolved:
+        await update.message.reply_text(
+            "❌ None of those could be resolved to a real user. Check the IDs/usernames and try again."
+        )
+        return WB_IDS
+
+    context.user_data["wb_ids"] = resolved
+    msg = f"✅ Resolved <b>{len(resolved)}</b> users.\n\nWhat should be applied to all of them?"
+    if not_found:
+        msg += f"\n\n⚠️ Not found (skipped): {', '.join(not_found[:15])}"
+        if len(not_found) > 15:
+            msg += f" (+{len(not_found) - 15} more)"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Coins", callback_data="wb:add", style="primary"),
+         InlineKeyboardButton("➖ Remove Coins", callback_data="wb:remove", style="primary")],
+        [InlineKeyboardButton("🚫 Ban All", callback_data="wb:ban", style="primary"),
+         InlineKeyboardButton("✅ Unban All", callback_data="wb:unban", style="primary")],
+        [InlineKeyboardButton("👑 Give Premium", callback_data="wb:premium", style="primary")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="wb:cancel", style="primary")],
+    ])
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+    return WB_ACTION
+
+
+async def cb_wb_action_coins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["wb_coin_action"] = "add" if query.data == "wb:add" else "remove"
+    verb = "add to" if query.data == "wb:add" else "remove from"
+    await query.message.reply_text(f"🪙 Enter the coin amount to {verb} all {len(context.user_data['wb_ids'])} users:")
+    return WB_AMOUNT
+
+
+async def conv_wm_bulk_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ Please enter a valid positive number.")
+        return WB_AMOUNT
+    amount = int(text)
+    target_ids = context.user_data.pop("wb_ids")
+    action = context.user_data.pop("wb_coin_action")
+    is_add = action == "add"
+
+    verb = "Adding" if is_add else "Removing"
+    status_msg = await update.message.reply_text(f"⏳ {verb} {amount} coins for {len(target_ids)} users...")
+    ok_list: list[int] = []
+    skipped: list[int] = []
+
+    async def process_one(uid: int) -> None:
+        row = await get_user_row(uid)
+        if not row:
+            skipped.append(uid)
+            return
+        if is_add:
+            await add_coins(uid, amount, "admin_gift", f"Bulk admin gift: {amount} coins")
+            success = True
+        else:
+            success = await remove_coins(uid, amount, "admin_deduct", f"Bulk admin deduct: {amount} coins")
+        if not success:
+            skipped.append(uid)
+            return
+        ok_list.append(uid)
+        await TELEGRAM_SEND_LIMITER.acquire()
+        try:
+            verb_msg = f"🎁 <b>{amount} Coins</b> have been added to your wallet by admin!" if is_add \
+                else f"⚠️ <b>{amount} Coins</b> have been deducted from your wallet by admin."
+            await context.bot.send_message(uid, verb_msg, parse_mode=ParseMode.HTML)
+        except TelegramError:
+            pass
+
+    await asyncio.gather(*(process_one(uid) for uid in target_ids))
+
+    past_verb = "Added" if is_add else "Removed"
+    result = f"✅ <b>Bulk {past_verb} Complete</b>\n\n🪙 {past_verb} {amount} coins for <b>{len(ok_list)}</b> users."
+    if skipped:
+        result += f"\n⚠️ Skipped (not found or insufficient balance): {', '.join(str(u) for u in skipped[:20])}"
+        if len(skipped) > 20:
+            result += f" (+{len(skipped) - 20} more)"
+    await status_msg.edit_text(result, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def cb_wb_action_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target_ids = context.user_data.pop("wb_ids")
+    banned = 1 if query.data == "wb:ban" else 0
+    async with db_conn() as db:
+        for uid in target_ids:
+            await db.execute("UPDATE users SET is_banned=? WHERE user_id=?", (banned, uid))
+        await db.commit()
+    action_word = "Banned" if banned else "Unbanned"
+    await query.message.reply_text(f"✅ <b>{action_word}</b> {len(target_ids)} users.", parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def cb_wb_action_premium_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("7 Days", callback_data="wb:pset:7", style="primary"),
+         InlineKeyboardButton("30 Days", callback_data="wb:pset:30", style="primary")],
+        [InlineKeyboardButton("90 Days", callback_data="wb:pset:90", style="primary"),
+         InlineKeyboardButton("Lifetime", callback_data="wb:pset:0", style="primary")],
+    ])
+    await query.message.reply_text("👑 Select Premium duration to grant to all selected users:", reply_markup=kb)
+    return WB_PREMIUM
+
+
+async def cb_wb_action_premium_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    days = int(query.data.split(":")[2])
+    target_ids = context.user_data.pop("wb_ids")
+    for uid in target_ids:
+        await grant_premium(uid, None if days == 0 else days, update.effective_user.id)
+        await TELEGRAM_SEND_LIMITER.acquire()
+        try:
+            label = "Lifetime" if days == 0 else f"{days} days"
+            await context.bot.send_message(
+                uid, f"👑 <b>You've been granted Premium!</b>\nDuration: {label}", parse_mode=ParseMode.HTML
+            )
+        except TelegramError:
+            pass
+    label = "Lifetime" if days == 0 else f"{days} Days"
+    await query.message.reply_text(f"✅ Granted <b>{label}</b> Premium to {len(target_ids)} users.", parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def cb_wb_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("wb_ids", None)
+    context.user_data.pop("wb_coin_action", None)
+    await query.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
+
+
+async def cb_pending_payments_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not await require_owner(update):
+        return
+    await query.answer()
+    page = int(query.data.split(":")[2])
+    per_page = 10
+    async with db_conn() as db:
+        total = (await (await db.execute("SELECT COUNT(*) FROM payments WHERE status='pending'")).fetchone())[0]
+        cur = await db.execute(
+            "SELECT * FROM payments WHERE status='pending' ORDER BY payment_id ASC LIMIT ? OFFSET ?",
+            (per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    if not rows and page == 0:
+        text = "📋 <b>Pending Payments</b>\n\nNothing pending right now — all caught up! ✅"
+        buttons = [[InlineKeyboardButton("⬅ Back", callback_data="ad:walletmgr", style="primary")]]
+    else:
+        text = f"📋 <b>Pending Payments</b>  —  Total: <b>{total}</b>\n\nTap Accept/Reject on any request below:\n"
+        buttons = []
+        for r in rows:
+            urow = await get_user_row(r["user_id"])
+            uname = f"@{urow['username']}" if urow and urow["username"] else (urow["first_name"] if urow else f"ID {r['user_id']}")
+            text += f"\n👤 <b>{html.escape(uname or str(r['user_id']))}</b> — ⭐{r['stars']} → 🪙{r['coins']} <i>({fmt_date(r['timestamp'])})</i>"
+            buttons.append([
+                InlineKeyboardButton(f"✅ Accept #{r['payment_id']}", callback_data=f"pay:accept:{r['payment_id']}", style="primary"),
+                InlineKeyboardButton(f"❌ Reject #{r['payment_id']}", callback_data=f"pay:reject:{r['payment_id']}", style="primary"),
+            ])
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"pp:list:{page-1}", style="primary"))
+        if (page + 1) * per_page < total:
+            nav.append(InlineKeyboardButton("Next ➡", callback_data=f"pp:list:{page+1}", style="primary"))
+        if nav:
+            buttons.append(nav)
+        buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:walletmgr", style="primary")])
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_wm_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM transactions ORDER BY tx_id DESC LIMIT 15")
+        rows = await cur.fetchall()
+    if not rows:
+        text = "📜 No transactions yet."
+    else:
+        lines = ["📜 <b>Recent Wallet History</b>\n"]
+        for r in rows:
+            lines.append(f"👤 <code>{r['user_id']}</code> {'+' if r['amount']>=0 else ''}{r['amount']} — {html.escape(r['tx_type'])}")
+        text = "\n".join(lines)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button("ad:walletmgr"))
+
+
+
+async def cb_admin_redeemmgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    is_owner = update.effective_user.id == OWNER_ID
+    rows = [
+        [InlineKeyboardButton("➕ Create Code", callback_data="rm:create", style="primary")],
+        [InlineKeyboardButton("📋 List Codes", callback_data="rm:list", style="primary")],
+        [InlineKeyboardButton("🗑 Delete Code", callback_data="rm:delstart", style="primary")],
+    ]
+    if is_owner:
+        rows.append([InlineKeyboardButton("🗑 Delete ALL Codes", callback_data="rm:delall", style="primary")])
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")])
+    kb = InlineKeyboardMarkup(rows)
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("🎟 <b>Redeem Manager</b>", parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text("🎟 <b>Redeem Manager</b>", parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_rm_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        async with db_conn() as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM redeems WHERE created_by=? AND created_at >= ?",
+                (user_id, today_start),
+            )
+            count_today = (await cur.fetchone())[0]
+        if count_today >= ADMIN_DAILY_REDEEM_LIMIT:
+            await query.answer(
+                f"🚫 Daily limit reached — admins can create up to {ADMIN_DAILY_REDEEM_LIMIT} redeem codes per day.",
+                show_alert=True,
+            )
+            return ConversationHandler.END
+    await query.answer()
+    await query.message.reply_text("🎟 Enter the redeem code (e.g. WELCOME500):")
+    return RM_CODE
+
+
+async def conv_rm_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    code = update.message.text.strip().upper()
+    if not re.match(r"^[A-Z0-9_\-]{3,32}$", code):
+        await update.message.reply_text("❌ Invalid code format. Use letters/numbers only (3-32 chars).")
+        return RM_CODE
+    async with db_conn() as db:
+        cur = await db.execute("SELECT 1 FROM redeems WHERE code=?", (code,))
+        if await cur.fetchone():
+            await update.message.reply_text("❌ This code already exists. Try another.")
+            return RM_CODE
+    context.user_data["rm_code"] = code
+    await update.message.reply_text("💰 Enter Coin Reward (e.g. 500):")
+    return RM_COINS
+
+
+async def conv_rm_coins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("❌ Please enter a valid number.")
+        return RM_COINS
+    amount = int(text)
+    if update.effective_user.id != OWNER_ID:
+        if amount > ADMIN_MAX_REDEEM_COINS or amount < ADMIN_MIN_REDEEM_COINS:
+            await update.message.reply_text(
+                f"🚫 Admins can only create codes worth between {ADMIN_MIN_REDEEM_COINS}–{ADMIN_MAX_REDEEM_COINS} coins."
+            )
+            return RM_COINS
+    context.user_data["rm_coins"] = amount
+    await update.message.reply_text("⭐ Enter Premium Reward in days (0 for none):")
+    return RM_PREMIUM
+
+
+async def conv_rm_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("❌ Please enter a valid number.")
+        return RM_PREMIUM
+    context.user_data["rm_premium"] = int(text)
+    await update.message.reply_text("🔢 Enter Usage Limit (0 for unlimited):")
+    return RM_LIMIT
+
+
+async def conv_rm_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("❌ Please enter a valid number.")
+        return RM_LIMIT
+    context.user_data["rm_limit"] = int(text)
+    await update.message.reply_text("📅 Enter Expiry Date (DD-MM-YYYY) or send - for no expiry:")
+    return RM_EXPIRY
+
+
+async def conv_rm_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    expiry_iso = None
+    if text != "-":
+        try:
+            expiry_iso = datetime.strptime(text, "%d-%m-%Y").isoformat()
+        except ValueError:
+            await update.message.reply_text("❌ Invalid date format. Use DD-MM-YYYY or send -.")
+            return RM_EXPIRY
+
+    d = context.user_data
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO redeems (code, coin_reward, premium_days, usage_limit, expiry_date, status, created_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
+            (d["rm_code"], d["rm_coins"], d["rm_premium"], d["rm_limit"], expiry_iso,
+             update.effective_user.id, datetime.utcnow().isoformat()),
+        )
+        await db.commit()
+
+    await update.message.reply_text(
+        f"✅ <b>Redeem Code Created!</b>\n\n🎟 Code: <code>{d['rm_code']}</code>\n💰 Coins: {d['rm_coins']}\n"
+        f"⭐ Premium Days: {d['rm_premium']}\n🔢 Usage Limit: {d['rm_limit'] or 'Unlimited'}\n"
+        f"📅 Expiry: {text if text != '-' else 'Never'}",
+        parse_mode=ParseMode.HTML,
+    )
+    await log_admin_action(
+        context.bot, update.effective_user.id,
+        f"🎟 Created redeem code <code>{d['rm_code']}</code> — {d['rm_coins']} coins"
+    )
+    for k in ["rm_code", "rm_coins", "rm_premium", "rm_limit"]:
+        context.user_data.pop(k, None)
+    return ConversationHandler.END
+
+
+async def cb_rm_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM redeems ORDER BY created_at DESC LIMIT 15")
+        rows = await cur.fetchall()
+    if not rows:
+        text = "📋 No redeem codes yet."
+    else:
+        lines = ["📋 <b>Redeem Codes</b>\n"]
+        for r in rows:
+            lines.append(
+                f"🎟 <code>{r['code']}</code> — {r['coin_reward']}🪙 | "
+                f"{r['used_count']}/{r['usage_limit'] or '∞'} used | {r['status']}"
+            )
+        text = "\n".join(lines)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button("ad:redeemmgr"))
+
+
+async def cb_rm_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "🗑 Enter the exact redeem code to delete:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="rm:delcancel", style="primary")]]),
+    )
+    return RM_DELETE
+
+
+async def conv_rm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    code = update.message.text.strip().upper()
+    async with db_conn() as db:
+        cur = await db.execute("SELECT 1 FROM redeems WHERE code=?", (code,))
+        if not await cur.fetchone():
+            await update.message.reply_text("❌ No such code found. Please check and try again, or /cancel.")
+            return RM_DELETE
+        await db.execute("DELETE FROM redeems WHERE code=?", (code,))
+        await db.execute("DELETE FROM redeem_uses WHERE code=?", (code,))
+        await db.commit()
+    await update.message.reply_text(f"✅ Deleted code: <code>{html.escape(code)}</code>", parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def cb_rm_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
+
+async def cb_rm_delete_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM redeems")
+        count = (await cur.fetchone())[0]
+    if count == 0:
+        await query.edit_message_text("No redeem codes to delete.", reply_markup=back_button("ad:redeemmgr"))
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Yes, Delete ALL", callback_data="rm:delallconfirm", style="primary"),
+         InlineKeyboardButton("❌ No", callback_data="ad:redeemmgr", style="primary")],
+    ])
+    await query.edit_message_text(
+        f"⚠️ <b>Delete ALL {count} Redeem Codes?</b>\n\nThis cannot be undone.",
+        parse_mode=ParseMode.HTML, reply_markup=kb,
+    )
+
+
+async def cb_rm_delete_all_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update):
+        return
+    query = update.callback_query
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM redeems")
+        count = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM redeems")
+        await db.execute("DELETE FROM redeem_uses")
+        await db.commit()
+    await query.answer("🗑 Deleted all codes")
+    await query.edit_message_text(f"🗑 <b>Deleted {count} redeem codes.</b>", parse_mode=ParseMode.HTML)
+    await log_admin_action(context.bot, update.effective_user.id, f"🗑 Deleted ALL {count} redeem codes")
+
+
+
+async def cb_admin_usermgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return ConversationHandler.END
+    if update.callback_query:
+        await update.callback_query.answer()
+    await update.effective_message.reply_text("🔍 Enter User ID or @username to search:")
+    return UM_SEARCH
+
+
+async def conv_um_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        if text.isdigit():
+            cur = await db.execute("SELECT * FROM users WHERE user_id=?", (int(text),))
+        else:
+            uname = text.lstrip("@")
+            cur = await db.execute("SELECT * FROM users WHERE username=?", (uname,))
+        row = await cur.fetchone()
+
+    if not row:
+        await update.message.reply_text("❌ User not found.")
+        return ConversationHandler.END
+
+    await send_user_profile(update.message, row["user_id"])
+    return ConversationHandler.END
+
+
+async def send_user_profile(message_or_query, target_id: int, edit: bool = False):
+    row = await get_user_row(target_id)
+    if not row:
+        return
+    balance = await get_balance(target_id)
+    async with db_conn() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (target_id,))
+        refs = (await cur.fetchone())[0]
+    premium = "⭐ Active" if await is_premium_active(target_id) else "❌ None"
+    banned = "🚫 Banned" if row["is_banned"] else "✅ Active"
+
+    text = (
+        f"👤 <b>User Profile</b>\n\n"
+        f"🆔 ID: <code>{target_id}</code>\n"
+        f"📛 Name: {html.escape(row['first_name'] or '—')}\n"
+        f"🔗 Username: @{html.escape(row['username']) if row['username'] else '—'}\n"
+        f"📅 Joined: {fmt_date(row['join_date'])}\n"
+        f"🪙 Wallet: {balance}\n"
+        f"👥 Referrals: {refs}\n"
+        f"⭐ Premium: {premium}\n"
+        f"🔒 Status: {banned}"
+    )
+    is_owner = message_or_query.from_user.id == OWNER_ID
+    rows = [
+        [InlineKeyboardButton("➕ Add Coins", callback_data=f"um:addc:{target_id}", style="primary"),
+         InlineKeyboardButton("➖ Remove Coins", callback_data=f"um:remc:{target_id}", style="primary")],
+    ]
+    if is_owner:
+        rows.append([InlineKeyboardButton("🚫 Ban", callback_data=f"um:ban:{target_id}", style="primary"),
+                     InlineKeyboardButton("✅ Unban", callback_data=f"um:unban:{target_id}", style="primary")])
+    rows.append([InlineKeyboardButton("👑 Give Premium", callback_data=f"um:givep:{target_id}", style="primary"),
+                 InlineKeyboardButton("❌ Remove Premium", callback_data=f"um:remp:{target_id}", style="primary")])
+    kb = InlineKeyboardMarkup(rows)
+    if hasattr(message_or_query, "edit_message_text") and edit:
+        await message_or_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await message_or_query.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+
+async def cb_admin_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await send_all_users_list(update, context, page=0)
+
+
+async def send_all_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    per_page = 10
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        total = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        cur = await db.execute(
+            "SELECT user_id, username, first_name, is_banned FROM users "
+            "ORDER BY join_date DESC LIMIT ? OFFSET ?",
+            (per_page, page * per_page),
+        )
+        rows = await cur.fetchall()
+
+    text = f"👤 <b>All Users</b>\n\n👥 Total Registered: <b>{total}</b>\n\nTap a user to view or manage their profile:"
+    buttons = []
+    for r in rows:
+        label = f"@{r['username']}" if r["username"] else (r["first_name"] or f"ID {r['user_id']}")
+        tag = "🚫 " if r["is_banned"] else "👤 "
+        buttons.append([InlineKeyboardButton(f"{tag}{label}", callback_data=f"au:view:{r['user_id']}:{page}", style="primary")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"au:list:{page-1}", style="primary"))
+    if (page + 1) * per_page < total:
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"au:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_au_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":")[2])
+    await send_all_users_list(update, context, page)
+
+
+async def cb_au_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    target_id = int(query.data.split(":")[2])
+    await send_user_profile(query, target_id, edit=True)
+
+
+async def cb_um_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update):
+        return
+    query = update.callback_query
+    action, target_id = query.data.split(":")[1], int(query.data.split(":")[2])
+    banned = 1 if action == "ban" else 0
+    async with db_conn() as db:
+        await db.execute("UPDATE users SET is_banned=? WHERE user_id=?", (banned, target_id))
+        await db.commit()
+    await query.answer("✅ Updated")
+    await log_admin_action(context.bot, update.effective_user.id, f"{'🚫 Banned' if banned else '✅ Unbanned'} user {target_id}")
+    await send_user_profile(query, target_id, edit=True)
+
+
+async def cb_um_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    action, target_id = query.data.split(":")[1], int(query.data.split(":")[2])
+    if action == "remp":
+        await remove_premium(target_id)
+        await query.answer("✅ Premium removed")
+        await send_user_profile(query, target_id, edit=True)
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("7 Days", callback_data=f"um:pset:{target_id}:7", style="primary"),
+         InlineKeyboardButton("30 Days", callback_data=f"um:pset:{target_id}:30", style="primary")],
+        [InlineKeyboardButton("90 Days", callback_data=f"um:pset:{target_id}:90", style="primary"),
+         InlineKeyboardButton("Lifetime", callback_data=f"um:pset:{target_id}:0", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data=f"um:back:{target_id}", style="primary")],
+    ])
+    await query.answer()
+    await query.edit_message_text("👑 Select Premium Duration:", reply_markup=kb)
+
+
+async def cb_um_pset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    _, _, target_id, days = query.data.split(":")
+    target_id, days = int(target_id), int(days)
+    await grant_premium(target_id, None if days == 0 else days, update.effective_user.id)
+    await query.answer("✅ Premium granted")
+    try:
+        await context.bot.send_message(
+            target_id,
+            f"👑 <b>You've been granted Premium!</b>\nDuration: {'Lifetime' if days==0 else f'{days} days'}",
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramError:
+        pass
+    await log_admin_action(
+        context.bot, update.effective_user.id,
+        f"👑 Granted {'Lifetime' if days == 0 else f'{days} days'} Premium to user {target_id}"
+    )
+    await send_user_profile(query, target_id, edit=True)
+
+
+async def cb_um_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    target_id = int(query.data.split(":")[2])
+    await query.answer()
+    await send_user_profile(query, target_id, edit=True)
+
+
+async def cb_um_coins_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action, target_id = query.data.split(":")[1], int(query.data.split(":")[2])
+    context.user_data["um_action"] = "add" if action == "addc" else "remove"
+    context.user_data["um_target"] = target_id
+    await query.message.reply_text("🪙 Enter the coin amount:")
+    return UM_AMOUNT
+
+
+async def conv_um_coins_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("❌ Please enter a valid positive number.")
+        return UM_AMOUNT
+    amount = int(text)
+    target_id = context.user_data.pop("um_target")
+    action = context.user_data.pop("um_action")
+    if action == "add":
+        await add_coins(target_id, amount, "admin_gift", "Admin added coins via User Manager")
+        await update.message.reply_text(f"✅ Added {amount} coins to user {target_id}.")
+    else:
+        ok = await remove_coins(target_id, amount, "admin_deduct", "Admin removed coins via User Manager")
+        await update.message.reply_text(
+            f"✅ Removed {amount} coins from user {target_id}." if ok else "❌ Insufficient balance to remove that amount."
+        )
+    return ConversationHandler.END
+
+
+
+async def cb_admin_premiummgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM premium ORDER BY granted_at DESC LIMIT 20")
+        rows = await cur.fetchall()
+    if not rows:
+        text = "👑 <b>Premium Manager</b>\n\nNo premium users yet.\n\nUse 👥 User Manager to grant premium to a specific user."
+    else:
+        lines = ["👑 <b>Premium Users</b>\n"]
+        for r in rows:
+            status = "Lifetime" if r["is_lifetime"] else fmt_date(r["expiry_date"])
+            lines.append(f"🆔 <code>{r['user_id']}</code> — {status}")
+        text = "\n".join(lines)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button("ad:home"))
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+
+async def cb_admin_adminmgr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM admins ORDER BY added_date")
+        rows = await cur.fetchall()
+
+    lines = ["🛡 <b>Admin Manager</b>\n"]
+    lines.append(f"👑 Owner: <code>{OWNER_ID}</code>")
+    for r in rows:
+        if r["user_id"] == OWNER_ID:
+            continue
+        u = await get_user_row(r["user_id"])
+        label = f"@{u['username']}" if u and u["username"] else (u["first_name"] if u else "Unknown")
+        role_tag = "🥇 Senior" if r["role"] == "senior" else "🥈 Junior"
+        lines.append(f"🛡 <code>{r['user_id']}</code> — {html.escape(label or '—')} ({role_tag})")
+    text = "\n".join(lines)
+
+    buttons = []
+    is_owner = update.effective_user.id == OWNER_ID
+    if is_owner:
+        buttons.append([InlineKeyboardButton("➕ Add Admin", callback_data="am:add", style="primary"),
+                         InlineKeyboardButton("➖ Remove Admin", callback_data="am:remove", style="primary")])
+        buttons.append([InlineKeyboardButton("📜 Action Log", callback_data="am:log:0", style="primary")])
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")])
+    kb = InlineKeyboardMarkup(buttons)
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_am_log_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not await require_owner(update):
+        return
+    await query.answer()
+    page = int(query.data.split(":")[2])
+    per_page = 10
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM admin_logs ORDER BY log_id DESC LIMIT ? OFFSET ?", (per_page, page * per_page)
+        )
+        rows = await cur.fetchall()
+
+    if not rows and page == 0:
+        text = "📜 <b>Admin Action Log</b>\n\nNo actions recorded yet."
+    else:
+        lines = ["📜 <b>Admin Action Log</b>\n"]
+        for r in rows:
+            u = await get_user_row(r["actor_id"])
+            label = f"@{u['username']}" if u and u["username"] else str(r["actor_id"])
+            lines.append(f"👤 {html.escape(label)} — {r['action_text']}\n<i>{fmt_date(r['timestamp'])}</i>")
+        text = "\n\n".join(lines)
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"am:log:{page-1}", style="primary"))
+    if len(rows) == per_page:
+        nav.append(InlineKeyboardButton("Next ➡", callback_data=f"am:log:{page+1}", style="primary"))
+    buttons = [nav] if nav else []
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:adminmgr", style="primary")])
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_am_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        await query.answer("🚫 Only the owner can add admins.", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    await query.message.reply_text("👤 Send the User ID or @username to promote to admin:")
+    return AM_ADD_USER
+
+
+async def conv_am_add_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    target_id = None
+    async with db_conn() as db:
+        if text.startswith("@"):
+            cur = await db.execute("SELECT user_id FROM users WHERE username=?", (text.lstrip("@"),))
+            row = await cur.fetchone()
+            if row:
+                target_id = row[0]
+        elif text.isdigit():
+            target_id = int(text)
+
+    if target_id is None:
+        await update.message.reply_text(
+            "❌ Couldn't find that user. They need to have started the bot at least once. Try again, or /cancel."
+        )
+        return AM_ADD_USER
+
+    context.user_data["am_target_id"] = target_id
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥇 Senior Admin", callback_data="am:role:senior", style="primary"),
+         InlineKeyboardButton("🥈 Junior Admin", callback_data="am:role:junior", style="primary")],
+    ])
+    await update.message.reply_text(
+        "🛡 Choose their role:\n\n"
+        "🥇 <b>Senior</b> — their actions are only reported to you (the Owner).\n"
+        "🥈 <b>Junior</b> — their actions are reported to you AND all Senior admins.",
+        parse_mode=ParseMode.HTML, reply_markup=kb,
+    )
+    return AM_ADD_ROLE
+
+
+async def cb_am_add_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    role = query.data.split(":")[2]
+    target_id = context.user_data.pop("am_target_id", None)
+    if target_id is None:
+        await query.message.reply_text("❌ Something went wrong — please start again.")
+        return ConversationHandler.END
+
+    async with db_conn() as db:
+        await db.execute(
+            "INSERT INTO admins (user_id, added_date, role) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET role=excluded.role",
+            (target_id, datetime.utcnow().isoformat(), role),
+        )
+        await db.commit()
+
+    role_label = "Senior Admin 🥇" if role == "senior" else "Junior Admin 🥈"
+    await query.message.reply_text(
+        f"✅ User <code>{target_id}</code> is now a <b>{role_label}</b>.", parse_mode=ParseMode.HTML
+    )
+    try:
+        await context.bot.send_message(
+            target_id, f"🛡 <b>You've been made a {role_label} of this bot!</b>", parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        pass
+    return ConversationHandler.END
+
+
+async def cb_am_remove_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        await query.answer("🚫 Only the owner can remove admins.", show_alert=True)
+        return
+    await query.answer()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM admins WHERE user_id != ? ORDER BY added_date", (OWNER_ID,))
+        rows = await cur.fetchall()
+    if not rows:
+        await query.edit_message_text("No sub-admins to remove.", reply_markup=back_button("ad:adminmgr"))
+        return
+    buttons = []
+    for r in rows:
+        u = await get_user_row(r["user_id"])
+        label = f"@{u['username']}" if u and u["username"] else str(r["user_id"])
+        buttons.append([InlineKeyboardButton(f"➖ {label}", callback_data=f"am:rm:{r['user_id']}", style="primary")])
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:adminmgr", style="primary")])
+    await query.edit_message_text("➖ Select an admin to remove:", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def cb_am_remove_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        await query.answer("🚫 Only the owner can remove admins.", show_alert=True)
+        return
+    target_id = int(query.data.split(":")[2])
+    if target_id == OWNER_ID:
+        await query.answer("🚫 Can't remove the owner.", show_alert=True)
+        return
+    async with db_conn() as db:
+        await db.execute("DELETE FROM admins WHERE user_id=?", (target_id,))
+        await db.commit()
+    await query.answer("✅ Removed")
+    await cb_am_remove_menu(update, context)
+
+
+
+async def cb_admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return ConversationHandler.END
+    if update.callback_query:
+        await update.callback_query.answer()
+    await update.effective_message.reply_text(
+        "📢 Send the message you want to broadcast (text, photo, video, animation, sticker, document, voice, or audio).\n\n"
+        "Send /cancel to abort."
+    )
+    return BR_CONTENT
+
+
+async def conv_broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    async with db_conn() as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        all_users = [r[0] for r in await cur.fetchall()]
+
+    status_msg = await msg.reply_text(f"📢 Broadcasting to {len(all_users)} users...")
+    counters = {"done": 0, "failed": 0}
+    counters_lock = asyncio.Lock()
+
+    async def send_one(uid: int) -> None:
+        await TELEGRAM_SEND_LIMITER.acquire()
+        try:
+            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat_id, message_id=msg.message_id)
+            async with counters_lock:
+                counters["done"] += 1
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 0.5)
+            try:
+                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat_id, message_id=msg.message_id)
+                async with counters_lock:
+                    counters["done"] += 1
+            except TelegramError:
+                async with counters_lock:
+                    counters["failed"] += 1
+        except TelegramError:
+            async with counters_lock:
+                counters["failed"] += 1
+
+    await asyncio.gather(*(send_one(uid) for uid in all_users))
+
+    await status_msg.edit_text(
+        f"✅ <b>Broadcast Complete</b>\n\n✅ Sent: {counters['done']}\n❌ Failed: {counters['failed']}",
+        parse_mode=ParseMode.HTML,
+    )
+    await log_admin_action(
+        context.bot, update.effective_user.id,
+        f"📢 Sent a broadcast — reached {counters['done']}, failed {counters['failed']}"
+    )
+    return ConversationHandler.END
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    admin = await is_admin(update.effective_user.id)
+    await update.message.reply_text("❌ Cancelled.", reply_markup=user_reply_keyboard(admin))
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+
+async def cb_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    async with db_conn() as db:
+        total_users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        active_users = (await (await db.execute(
+            "SELECT COUNT(*) FROM users WHERE last_seen > ?",
+            ((datetime.utcnow() - timedelta(days=7)).isoformat(),)
+        )).fetchone())[0]
+        premium_users = (await (await db.execute(
+            "SELECT COUNT(*) FROM premium WHERE is_lifetime=1 OR expiry_date > ?",
+            (datetime.utcnow().isoformat(),)
+        )).fetchone())[0]
+        total_files = (await (await db.execute("SELECT COUNT(*) FROM files WHERE is_deleted=0")).fetchone())[0]
+        total_downloads = (await (await db.execute("SELECT COUNT(*) FROM downloads")).fetchone())[0]
+        coins_distributed = (await (await db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM transactions WHERE amount > 0"
+        )).fetchone())[0]
+        redeem_count = (await (await db.execute("SELECT COUNT(*) FROM redeem_uses")).fetchone())[0]
+        referral_count = (await (await db.execute("SELECT COUNT(*) FROM referrals")).fetchone())[0]
+        revenue_stars = (await (await db.execute(
+            "SELECT COALESCE(SUM(stars),0) FROM payments WHERE status='accepted'"
+        )).fetchone())[0]
+        pending_payments = (await (await db.execute(
+            "SELECT COUNT(*) FROM payments WHERE status='pending'"
+        )).fetchone())[0]
+
+    text = (
+        "📊 <b>Statistics</b>\n\n"
+        f"👥 Total Users: <b>{total_users}</b>\n"
+        f"🟢 Active (7d): <b>{active_users}</b>\n"
+        f"⭐ Premium Users: <b>{premium_users}</b>\n"
+        f"📁 Total Files: <b>{total_files}</b>\n"
+        f"⬇ Downloads: <b>{total_downloads}</b>\n"
+        f"🪙 Coins Distributed: <b>{coins_distributed}</b>\n"
+        f"🎟 Redeem Count: <b>{redeem_count}</b>\n"
+        f"🚀 Referral Count: <b>{referral_count}</b>\n"
+        f"💰 Revenue: <b>{revenue_stars} ⭐</b>\n"
+        f"⏳ Pending Payments: <b>{pending_payments}</b>"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📈 Top Downloaded Files", callback_data="stats:topfiles", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_stats_top_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not await is_admin(update.effective_user.id):
+        await query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        return
+    await query.answer()
+    async with db_conn() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT file_name, downloads_count, price FROM files WHERE is_deleted=0 "
+            "ORDER BY downloads_count DESC LIMIT 10"
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        text = "📈 <b>Top Downloaded Files</b>\n\nNo files yet."
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        lines = ["📈 <b>Top 10 Downloaded Files</b>\n"]
+        for i, r in enumerate(rows):
+            rank = medals[i] if i < 3 else f"{i+1}."
+            tag = "FREE" if r["price"] == 0 else f"{r['price']} coins"
+            lines.append(f"{rank} {html.escape(r['file_name'])} — <b>{r['downloads_count']}</b> downloads ({tag})")
+        text = "\n".join(lines)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=back_button("ad:stats"))
+
+
+
+async def cb_admin_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer(ADMIN_ONLY_MSG, show_alert=True)
+        else:
+            await update.effective_message.reply_text(ADMIN_ONLY_MSG)
+        return
+    current = await get_setting("maintenance", "0")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Enable", callback_data="mt:on", style="primary"),
+         InlineKeyboardButton("❌ Disable", callback_data="mt:off", style="primary")],
+        [InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")],
+    ])
+    status = "🚧 ENABLED" if current == "1" else "✅ DISABLED"
+    text = f"🛠 <b>Maintenance Mode</b>\n\nCurrent status: <b>{status}</b>"
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cb_mt_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    val = "1" if query.data == "mt:on" else "0"
+    await set_setting("maintenance", val)
+    await query.answer("✅ Updated")
+    await log_admin_action(context.bot, update.effective_user.id, f"🛠 Maintenance mode turned {'ON' if val == '1' else 'OFF'}")
+    await cb_admin_maintenance(update, context)
+
+
+
+SETTINGS_FIELDS = {
+    "referral_reward": "🚀 Referral Reward (coins)",
+    "daily_bonus": "🎁 Daily Bonus (coins)",
+    "premium_daily_bonus": "👑 Premium Daily Bonus (coins)",
+    "coin_packages": "🪙 Coin Packages (JSON list)",
+    "premium_pricing": "👑 Premium Pricing (JSON list)",
+    "coin_rate_bdt": "💵 Coins per 1 Taka",
+    "bdt_payment_details": "💵 BDT Payment Details (bKash/Nagad)",
+    "spin_settings": "🎰 Daily Spin Settings (JSON)",
+    "mystery_box_pricing": "🎁 Mystery Box Pricing (JSON)",
+    "referral_milestones": "🚀 Referral Milestone Rewards (JSON)",
+    "streak_rewards": "🔥 Login Streak Rewards (JSON)",
+    "star_rate": "⭐ Star Rate",
+    "support_username": "💬 Support Username",
+    "payment_username": "💰 Payment Username (Stars)",
+    "bot_name": "🏷 Bot Name",
+    "force_join": "📡 Force Join (1/0)",
 }
 
-@bot.message_handler(func=lambda message: message.text in BUTTON_TEXT_TO_LOGIC)
-def handle_button_text(message):
-    logic_func = BUTTON_TEXT_TO_LOGIC.get(message.text)
-    if logic_func: logic_func(message)
-    else: logger.warning(f"Button text '{message.text}' matched but no logic func.")
 
-@bot.message_handler(commands=['updateschannel'])
-def command_updates_channel(message): _logic_updates_channel(message)
-@bot.message_handler(commands=['uploadfile'])
-def command_upload_file(message): _logic_upload_file(message)
-@bot.message_handler(commands=['checkfiles'])
-def command_check_files(message): _logic_check_files(message)
-@bot.message_handler(commands=['botspeed'])
-def command_bot_speed(message): _logic_bot_speed(message)
-@bot.message_handler(commands=['contactowner'])
-def command_contact_owner(message): _logic_contact_owner(message)
-@bot.message_handler(commands=['subscriptions'])
-def command_subscriptions(message): _logic_subscriptions_panel(message)
-@bot.message_handler(commands=['statistics'])
-def command_statistics(message): _logic_statistics(message)
-@bot.message_handler(commands=['broadcast'])
-def command_broadcast(message): _logic_broadcast_init(message)
-@bot.message_handler(commands=['lockbot']) 
-def command_lock_bot(message): _logic_toggle_lock_bot(message)
-@bot.message_handler(commands=['adminpanel'])
-def command_admin_panel(message): _logic_admin_panel(message)
-@bot.message_handler(commands=['runningallcode'])
-def command_run_all_code(message): _logic_run_all_scripts(message)
-@bot.message_handler(commands=['managechannels'])
-def command_manage_channels(message): _logic_manage_mandatory_channels(message)
-@bot.message_handler(commands=['usermanagement'])
-def command_user_management(message): _logic_user_management(message)
-@bot.message_handler(commands=['manualinstall'])
-def command_manual_install(message): _logic_manual_install(message)
-@bot.message_handler(commands=['admininstall'])
-def command_admin_install(message): _logic_admin_install(message)
-
-@bot.message_handler(commands=['ping'])
-def ping(message):
-    user_id = message.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
+async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update):
         return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    start_ping_time = time.time() 
-    msg = bot.reply_to(message, "Pong!")
-    latency = round((time.time() - start_ping_time) * 1000, 2)
-    bot.edit_message_text(f"Pong! Latency: {latency} ms", message.chat.id, msg.message_id)
-
-# --- Document (File) Handler ---
-@bot.message_handler(content_types=['document'])
-def handle_file_upload_doc(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.reply_to(message, "❌ You are banned from using this bot.")
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.reply_to(message, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-
-    doc = message.document
-    logger.info(f"Doc from {user_id}: {doc.file_name} ({doc.mime_type}), Size: {doc.file_size}")
-
-    if bot_locked and user_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Bot locked, cannot accept files.")
-        return
-
-    # File limit check
-    file_limit = get_user_file_limit(user_id)
-    current_files = get_user_file_count(user_id)
-    if current_files >= file_limit:
-        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
-        bot.reply_to(message, f"⚠️ File limit ({current_files}/{limit_str}) reached. Delete files via /checkfiles.")
-        return
-
-    file_name = doc.file_name
-    if not file_name: bot.reply_to(message, "⚠️ No file name. Ensure file has a name."); return
-    file_ext = os.path.splitext(file_name)[1].lower()
-    if file_ext not in ['.py', '.js', '.zip']:
-        bot.reply_to(message, "⚠️ Unsupported type! Only `.py`, `.js`, `.zip` allowed.")
-        return
-    max_file_size = 20 * 1024 * 1024
-    if doc.file_size > max_file_size:
-        bot.reply_to(message, f"⚠️ File too large (Max: {max_file_size // 1024 // 1024} MB)."); return
-
-    try:
-        try:
-            bot.forward_message(OWNER_ID, chat_id, message.message_id)
-            bot.send_message(OWNER_ID, f"⬆️ File '{file_name}' from {message.from_user.first_name} (`{user_id}`)", parse_mode='Markdown')
-        except Exception as e: logger.error(f"Failed to forward uploaded file to OWNER_ID {OWNER_ID}: {e}")
-
-        download_wait_msg = bot.reply_to(message, f"⏳ Downloading `{file_name}`...")
-        file_info_tg_doc = bot.get_file(doc.file_id)
-        downloaded_file_content = bot.download_file(file_info_tg_doc.file_path)
-        bot.edit_message_text(f"✅ Downloaded `{file_name}`. Processing...", chat_id, download_wait_msg.message_id)
-        logger.info(f"Downloaded {file_name} for user {user_id}")
-        user_folder = get_user_folder(user_id)
-
-        if file_ext == '.zip':
-            handle_zip_file(downloaded_file_content, file_name, message)
-        else:
-            file_path = os.path.join(user_folder, file_name)
-            with open(file_path, 'wb') as f: f.write(downloaded_file_content)
-            logger.info(f"Saved single file to {file_path}")
-            
-            # Security check for script files
-            is_safe, security_msg = check_code_security(file_path, file_ext[1:])
-            if not is_safe:
-                security_warning_msg = f"🚨 File needs approval:\n👤 User: {user_id}\n📁 File: {file_name}\n⚠️ Reason: {security_msg}"
-                markup = types.InlineKeyboardMarkup()
-                markup.row(
-                    types.InlineKeyboardButton("✅ Approve", callback_data=f"approve_file_{user_id}_{file_name}"),
-                    types.InlineKeyboardButton("❌ Reject", callback_data=f"reject_file_{user_id}_{file_name}")
-                )
-                for admin_id in admin_ids:
-                    try:
-                        bot.send_message(admin_id, security_warning_msg, reply_markup=markup)
-                    except Exception as e:
-                        logger.error(f"Failed to send security warning to admin {admin_id}: {e}")
-                
-                bot.reply_to(message, f"⏳ File under security review. You will be notified upon approval.")
-                return
-                
-            # Pass user_id as script_owner_id
-            if file_ext == '.js': handle_js_file(file_path, user_id, user_folder, file_name, message)
-            elif file_ext == '.py': handle_py_file(file_path, user_id, user_folder, file_name, message)
-    except telebot.apihelper.ApiTelegramException as e:
-         logger.error(f"Telegram API Error handling file for {user_id}: {e}", exc_info=True)
-         if "file is too big" in str(e).lower():
-              bot.reply_to(message, f"❌ Telegram API Error: File too large to download (~20MB limit).")
-         else: bot.reply_to(message, f"❌ Telegram API Error: {str(e)}. Try later.")
-    except Exception as e:
-        logger.error(f"❌ General error handling file for {user_id}: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Unexpected error: {str(e)}")
-
-# --- Callback Query Handlers (for Inline Buttons) ---
-@bot.callback_query_handler(func=lambda call: True) 
-def handle_callbacks(call):
-    user_id = call.from_user.id
-    data = call.data
-    logger.info(f"Callback: User={user_id}, Data='{data}'")
-
-    # Check if user is banned
-    if is_user_banned(user_id) and data not in ['back_to_main']:
-        bot.answer_callback_query(call.id, "❌ You are banned from using this bot.", show_alert=True)
-        return
-
-    # Allow subscription check and back to main without subscription
-    if data not in ['check_subscription_status', 'back_to_main', 'manual_install']:
-        # Check mandatory subscription for other callbacks
-        is_subscribed, not_joined = check_mandatory_subscription(user_id)
-        if not is_subscribed and user_id not in admin_ids:
-            subscription_message, markup = create_subscription_check_message(not_joined)
-            bot.answer_callback_query(call.id)
-            try:
-                bot.edit_message_text(subscription_message, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-            except:
-                bot.send_message(call.message.chat.id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-            return
-
-    if bot_locked and user_id not in admin_ids and data not in ['back_to_main', 'speed', 'stats', 'check_subscription_status', 'manual_install']:
-        bot.answer_callback_query(call.id, "⚠️ Bot locked by admin.", show_alert=True)
-        return
-        
-    try:
-        if data == 'upload': upload_callback(call)
-        elif data == 'check_files': check_files_callback(call)
-        elif data.startswith('file_'): file_control_callback(call)
-        elif data.startswith('start_'): start_bot_callback(call)
-        elif data.startswith('stop_'): stop_bot_callback(call)
-        elif data.startswith('restart_'): restart_bot_callback(call)
-        elif data.startswith('delete_'): delete_bot_callback(call)
-        elif data.startswith('logs_'): logs_bot_callback(call)
-        elif data == 'speed': speed_callback(call)
-        elif data == 'back_to_main': back_to_main_callback(call)
-        elif data.startswith('confirm_broadcast_'): handle_confirm_broadcast(call)
-        elif data == 'cancel_broadcast': handle_cancel_broadcast(call)
-        elif data == 'manual_install': manual_install_callback(call)
-        # --- Admin Callbacks ---
-        elif data == 'subscription': admin_required_callback(call, subscription_management_callback)
-        elif data == 'stats': stats_callback(call)
-        elif data == 'lock_bot': admin_required_callback(call, lock_bot_callback)
-        elif data == 'unlock_bot': admin_required_callback(call, unlock_bot_callback)
-        elif data == 'run_all_scripts': admin_required_callback(call, run_all_scripts_callback)
-        elif data == 'broadcast': admin_required_callback(call, broadcast_init_callback) 
-        elif data == 'admin_panel': admin_required_callback(call, admin_panel_callback)
-        elif data == 'add_admin': owner_required_callback(call, add_admin_init_callback) 
-        elif data == 'remove_admin': owner_required_callback(call, remove_admin_init_callback) 
-        elif data == 'list_admins': admin_required_callback(call, list_admins_callback)
-        elif data == 'add_subscription': admin_required_callback(call, add_subscription_init_callback) 
-        elif data == 'remove_subscription': admin_required_callback(call, remove_subscription_init_callback) 
-        elif data == 'check_subscription': admin_required_callback(call, check_subscription_init_callback)
-        elif data == 'user_management': admin_required_callback(call, user_management_callback)
-        elif data == 'ban_user': admin_required_callback(call, ban_user_callback)
-        elif data == 'unban_user': admin_required_callback(call, unban_user_callback)
-        elif data == 'user_info': admin_required_callback(call, user_info_callback)
-        elif data == 'all_users': admin_required_callback(call, all_users_callback)
-        elif data == 'set_user_limit': admin_required_callback(call, set_user_limit_callback)
-        elif data == 'remove_user_limit': admin_required_callback(call, remove_user_limit_callback)
-        elif data == 'admin_settings': admin_required_callback(call, admin_settings_callback)
-        elif data == 'system_info': admin_required_callback(call, system_info_callback)
-        elif data == 'bot_performance': admin_required_callback(call, bot_performance_callback)
-        elif data == 'cleanup_files': admin_required_callback(call, cleanup_files_callback)
-        elif data == 'install_logs': admin_required_callback(call, install_logs_callback)
-        elif data == 'admin_install': admin_required_callback(call, admin_install_callback)
-        # --- Mandatory Channels Callbacks ---
-        elif data == 'manage_mandatory_channels': admin_required_callback(call, manage_mandatory_channels_callback)
-        elif data == 'add_mandatory_channel': admin_required_callback(call, add_mandatory_channel_callback)
-        elif data == 'remove_mandatory_channel': admin_required_callback(call, remove_mandatory_channel_callback)
-        elif data == 'list_mandatory_channels': admin_required_callback(call, list_mandatory_channels_callback)
-        elif data.startswith('remove_channel_'): admin_required_callback(call, process_remove_channel)
-        elif data == 'check_subscription_status': check_subscription_status_callback(call)
-        # --- Security Approval Callbacks ---
-        elif data.startswith('approve_file_'): admin_required_callback(call, process_approve_file)
-        elif data.startswith('reject_file_'): admin_required_callback(call, process_reject_file)
-        elif data.startswith('approve_zip_'): admin_required_callback(call, process_approve_zip)
-        elif data.startswith('reject_zip_'): admin_required_callback(call, process_reject_zip)
-        else:
-            bot.answer_callback_query(call.id, "Unknown action.")
-            logger.warning(f"Unhandled callback data: {data} from user {user_id}")
-    except Exception as e:
-        logger.error(f"Error handling callback '{data}' for {user_id}: {e}", exc_info=True)
-        try: bot.answer_callback_query(call.id, "Error processing request.", show_alert=True)
-        except Exception as e_ans: logger.error(f"Failed to answer callback after error: {e_ans}")
-
-def admin_required_callback(call, func_to_run):
-    if call.from_user.id not in admin_ids:
-        bot.answer_callback_query(call.id, "⚠️ Admin permissions required.", show_alert=True)
-        return
-    func_to_run(call) 
-
-def owner_required_callback(call, func_to_run):
-    if call.from_user.id != OWNER_ID:
-        bot.answer_callback_query(call.id, "⚠️ Owner permissions required.", show_alert=True)
-        return
-    func_to_run(call)
-
-# --- User Callbacks ---
-def manual_install_callback(call):
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id)
-    manual_install_module_init(call.message)
-
-def upload_callback(call):
-    user_id = call.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.answer_callback_query(call.id, "❌ You are banned from using this bot.", show_alert=True)
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_text(subscription_message, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        except:
-            bot.send_message(call.message.chat.id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    file_limit = get_user_file_limit(user_id)
-    current_files = get_user_file_count(user_id)
-    if current_files >= file_limit:
-        limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
-        bot.answer_callback_query(call.id, f"⚠️ File limit ({current_files}/{limit_str}) reached.", show_alert=True)
-        return
-    bot.answer_callback_query(call.id) 
-    bot.send_message(call.message.chat.id, "📤 Send your Python (`.py`), JS (`.js`), or ZIP (`.zip`) file.")
-
-def check_files_callback(call):
-    user_id = call.from_user.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.answer_callback_query(call.id, "❌ You are banned from using this bot.", show_alert=True)
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_text(subscription_message, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        except:
-            bot.send_message(call.message.chat.id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    chat_id = call.message.chat.id 
-    user_files_list = user_files.get(user_id, [])
-    if not user_files_list:
-        bot.answer_callback_query(call.id, "⚠️ No files uploaded.", show_alert=True)
-        try:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔙 Back to Main", callback_data='back_to_main'))
-            bot.edit_message_text("📂 Your files:\n\n(No files uploaded)", chat_id, call.message.message_id, reply_markup=markup)
-        except Exception as e: logger.error(f"Error editing msg for empty file list: {e}")
-        return
-    bot.answer_callback_query(call.id) 
-    markup = types.InlineKeyboardMarkup(row_width=1) 
-    for file_name, file_type in sorted(user_files_list): 
-        is_running = is_bot_running(user_id, file_name)
-        status_icon = "🟢 Running" if is_running else "🔴 Stopped"
-        btn_text = f"{file_name} ({file_type}) - {status_icon}"
-        markup.add(types.InlineKeyboardButton(btn_text, callback_data=f'file_{user_id}_{file_name}'))
-    markup.add(types.InlineKeyboardButton("🔙 Back to Main", callback_data='back_to_main'))
-    try:
-        bot.edit_message_text("📂 Your files:\nClick to manage.", chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-    except telebot.apihelper.ApiTelegramException as e:
-         if "message is not modified" in str(e): logger.warning("Msg not modified (files).")
-         else: logger.error(f"Error editing msg for file list: {e}")
-    except Exception as e: logger.error(f"Unexpected error editing msg for file list: {e}", exc_info=True)
-
-def file_control_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-
-        # Allow owner/admin to control any file, or user to control their own
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            logger.warning(f"User {requesting_user_id} tried to access file '{file_name}' of user {script_owner_id} without permission.")
-            bot.answer_callback_query(call.id, "⚠️ You can only manage your own files.", show_alert=True)
-            check_files_callback(call)
-            return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        if not any(f[0] == file_name for f in user_files_list):
-            logger.warning(f"File '{file_name}' not found for user {script_owner_id} during control.")
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True)
-            check_files_callback(call) 
-            return
-
-        bot.answer_callback_query(call.id) 
-        is_running = is_bot_running(script_owner_id, file_name)
-        status_text = '🟢 Running' if is_running else '🔴 Stopped'
-        file_type = next((f[1] for f in user_files_list if f[0] == file_name), '?') 
-        try:
-            bot.edit_message_text(
-                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}",
-                call.message.chat.id, call.message.message_id,
-                reply_markup=create_control_buttons(script_owner_id, file_name, is_running),
-                parse_mode='Markdown'
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-             if "message is not modified" in str(e): logger.warning(f"Msg not modified (controls for {file_name})")
-             else: raise 
-    except (ValueError, IndexError) as ve:
-        logger.error(f"Error parsing file control callback: {ve}. Data: '{call.data}'")
-        bot.answer_callback_query(call.id, "Error: Invalid action data.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in file_control_callback for data '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "An error occurred.", show_alert=True)
-
-def start_bot_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-        chat_id_for_reply = call.message.chat.id
-
-        logger.info(f"Start request: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
-
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            bot.answer_callback_query(call.id, "⚠️ Permission denied to start this script.", show_alert=True); return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        file_info = next((f for f in user_files_list if f[0] == file_name), None)
-        if not file_info:
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
-
-        file_type = file_info[1]
-        user_folder = get_user_folder(script_owner_id)
-        file_path = os.path.join(user_folder, file_name)
-
-        if not os.path.exists(file_path):
-            bot.answer_callback_query(call.id, f"⚠️ Error: File `{file_name}` missing! Re-upload.", show_alert=True)
-            remove_user_file_db(script_owner_id, file_name); check_files_callback(call); return
-
-        if is_bot_running(script_owner_id, file_name):
-            bot.answer_callback_query(call.id, f"⚠️ Script '{file_name}' already running.", show_alert=True)
-            try: bot.edit_message_reply_markup(chat_id_for_reply, call.message.message_id, reply_markup=create_control_buttons(script_owner_id, file_name, True))
-            except Exception as e: logger.error(f"Error updating buttons (already running): {e}")
-            return
-
-        bot.answer_callback_query(call.id, f"⏳ Attempting to start {file_name} for user {script_owner_id}...")
-
-        if file_type == 'py':
-            threading.Thread(target=run_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
-        elif file_type == 'js':
-            threading.Thread(target=run_js_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
-        else:
-             bot.send_message(chat_id_for_reply, f"❌ Error: Unknown file type '{file_type}' for '{file_name}'."); return 
-
-        time.sleep(1.5)
-        is_now_running = is_bot_running(script_owner_id, file_name) 
-        status_text = '🟢 Running' if is_now_running else '🟡 Starting (or failed, check logs/replies)'
-        try:
-            bot.edit_message_text(
-                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}",
-                chat_id_for_reply, call.message.message_id,
-                reply_markup=create_control_buttons(script_owner_id, file_name, is_now_running), parse_mode='Markdown'
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-             if "message is not modified" in str(e): logger.warning(f"Msg not modified after starting {file_name}")
-             else: raise
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing start callback '{call.data}': {e}")
-        bot.answer_callback_query(call.id, "Error: Invalid start command.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in start_bot_callback for '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error starting script.", show_alert=True)
-        try:
-            _, script_owner_id_err_str, file_name_err = call.data.split('_', 2)
-            script_owner_id_err = int(script_owner_id_err_str)
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_control_buttons(script_owner_id_err, file_name_err, False))
-        except Exception as e_btn: logger.error(f"Failed to update buttons after start error: {e_btn}")
-
-def stop_bot_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-        chat_id_for_reply = call.message.chat.id
-
-        logger.info(f"Stop request: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        file_info = next((f for f in user_files_list if f[0] == file_name), None)
-        if not file_info:
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
-
-        file_type = file_info[1] 
-        script_key = f"{script_owner_id}_{file_name}"
-
-        if not is_bot_running(script_owner_id, file_name): 
-            bot.answer_callback_query(call.id, f"⚠️ Script '{file_name}' already stopped.", show_alert=True)
-            try:
-                 bot.edit_message_text(
-                     f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: 🔴 Stopped",
-                     chat_id_for_reply, call.message.message_id,
-                     reply_markup=create_control_buttons(script_owner_id, file_name, False), parse_mode='Markdown')
-            except Exception as e: logger.error(f"Error updating buttons (already stopped): {e}")
-            return
-
-        bot.answer_callback_query(call.id, f"⏳ Stopping {file_name} for user {script_owner_id}...")
-        process_info = bot_scripts.get(script_key)
-        if process_info:
-            kill_process_tree(process_info)
-            if script_key in bot_scripts: del bot_scripts[script_key]; logger.info(f"Removed {script_key} from running after stop.")
-        else: logger.warning(f"Script {script_key} running by psutil but not in bot_scripts dict.")
-
-        try:
-            bot.edit_message_text(
-                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: 🔴 Stopped",
-                chat_id_for_reply, call.message.message_id,
-                reply_markup=create_control_buttons(script_owner_id, file_name, False), parse_mode='Markdown'
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-             if "message is not modified" in str(e): logger.warning(f"Msg not modified after stopping {file_name}")
-             else: raise
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing stop callback '{call.data}': {e}")
-        bot.answer_callback_query(call.id, "Error: Invalid stop command.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in stop_bot_callback for '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error stopping script.", show_alert=True)
-
-def restart_bot_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-        chat_id_for_reply = call.message.chat.id
-
-        logger.info(f"Restart: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        file_info = next((f for f in user_files_list if f[0] == file_name), None)
-        if not file_info:
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
-
-        file_type = file_info[1]; user_folder = get_user_folder(script_owner_id)
-        file_path = os.path.join(user_folder, file_name); script_key = f"{script_owner_id}_{file_name}"
-
-        if not os.path.exists(file_path):
-            bot.answer_callback_query(call.id, f"⚠️ Error: File `{file_name}` missing! Re-upload.", show_alert=True)
-            remove_user_file_db(script_owner_id, file_name)
-            if script_key in bot_scripts: del bot_scripts[script_key]
-            check_files_callback(call); return
-
-        bot.answer_callback_query(call.id, f"⏳ Restarting {file_name} for user {script_owner_id}...")
-        if is_bot_running(script_owner_id, file_name):
-            logger.info(f"Restart: Stopping existing {script_key}...")
-            process_info = bot_scripts.get(script_key)
-            if process_info: kill_process_tree(process_info)
-            if script_key in bot_scripts: del bot_scripts[script_key]
-            time.sleep(1.5) 
-
-        logger.info(f"Restart: Starting script {script_key}...")
-        if file_type == 'py':
-            threading.Thread(target=run_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
-        elif file_type == 'js':
-            threading.Thread(target=run_js_script, args=(file_path, script_owner_id, user_folder, file_name, call.message)).start()
-        else:
-             bot.send_message(chat_id_for_reply, f"❌ Unknown type '{file_type}' for '{file_name}'."); return
-
-        time.sleep(1.5) 
-        is_now_running = is_bot_running(script_owner_id, file_name) 
-        status_text = '🟢 Running' if is_now_running else '🟡 Starting (or failed)'
-        try:
-            bot.edit_message_text(
-                f"⚙️ Controls for: `{file_name}` ({file_type}) of User `{script_owner_id}`\nStatus: {status_text}",
-                chat_id_for_reply, call.message.message_id,
-                reply_markup=create_control_buttons(script_owner_id, file_name, is_now_running), parse_mode='Markdown'
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-             if "message is not modified" in str(e): logger.warning(f"Msg not modified (restart {file_name})")
-             else: raise
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing restart callback '{call.data}': {e}")
-        bot.answer_callback_query(call.id, "Error: Invalid restart command.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in restart_bot_callback for '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error restarting.", show_alert=True)
-        try:
-            _, script_owner_id_err_str, file_name_err = call.data.split('_', 2)
-            script_owner_id_err = int(script_owner_id_err_str)
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_control_buttons(script_owner_id_err, file_name_err, False))
-        except Exception as e_btn: logger.error(f"Failed to update buttons after restart error: {e_btn}")
-
-def delete_bot_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-        chat_id_for_reply = call.message.chat.id
-
-        logger.info(f"Delete: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        if not any(f[0] == file_name for f in user_files_list):
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
-
-        bot.answer_callback_query(call.id, f"🗑️ Deleting {file_name} for user {script_owner_id}...")
-        script_key = f"{script_owner_id}_{file_name}"
-        if is_bot_running(script_owner_id, file_name):
-            logger.info(f"Delete: Stopping {script_key}...")
-            process_info = bot_scripts.get(script_key)
-            if process_info: kill_process_tree(process_info)
-            if script_key in bot_scripts: del bot_scripts[script_key]
-            time.sleep(0.5) 
-
-        user_folder = get_user_folder(script_owner_id)
-        file_path = os.path.join(user_folder, file_name)
-        log_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
-        deleted_disk = []
-        if os.path.exists(file_path):
-            try: os.remove(file_path); deleted_disk.append(file_name); logger.info(f"Deleted file: {file_path}")
-            except OSError as e: logger.error(f"Error deleting {file_path}: {e}")
-        if os.path.exists(log_path):
-            try: os.remove(log_path); deleted_disk.append(os.path.basename(log_path)); logger.info(f"Deleted log: {log_path}")
-            except OSError as e: logger.error(f"Error deleting log {log_path}: {e}")
-
-        remove_user_file_db(script_owner_id, file_name)
-        deleted_str = ", ".join(f"`{f}`" for f in deleted_disk) if deleted_disk else "associated files"
-        try:
-            bot.edit_message_text(
-                f"🗑️ Record `{file_name}` (User `{script_owner_id}`) and {deleted_str} deleted!",
-                chat_id_for_reply, call.message.message_id, reply_markup=None, parse_mode='Markdown'
-            )
-        except Exception as e:
-            logger.error(f"Error editing msg after delete: {e}")
-            bot.send_message(chat_id_for_reply, f"🗑️ Record `{file_name}` deleted.", parse_mode='Markdown')
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing delete callback '{call.data}': {e}")
-        bot.answer_callback_query(call.id, "Error: Invalid delete command.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in delete_bot_callback for '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error deleting.", show_alert=True)
-
-def logs_bot_callback(call):
-    try:
-        _, script_owner_id_str, file_name = call.data.split('_', 2)
-        script_owner_id = int(script_owner_id_str)
-        requesting_user_id = call.from_user.id
-        chat_id_for_reply = call.message.chat.id
-
-        logger.info(f"Logs: Requester={requesting_user_id}, Owner={script_owner_id}, File='{file_name}'")
-        if not (requesting_user_id == script_owner_id or requesting_user_id in admin_ids):
-            bot.answer_callback_query(call.id, "⚠️ Permission denied.", show_alert=True); return
-
-        user_files_list = user_files.get(script_owner_id, [])
-        if not any(f[0] == file_name for f in user_files_list):
-            bot.answer_callback_query(call.id, "⚠️ File not found.", show_alert=True); check_files_callback(call); return
-
-        user_folder = get_user_folder(script_owner_id)
-        log_path = os.path.join(user_folder, f"{os.path.splitext(file_name)[0]}.log")
-        if not os.path.exists(log_path):
-            bot.answer_callback_query(call.id, f"⚠️ No logs for '{file_name}'.", show_alert=True); return
-
-        bot.answer_callback_query(call.id) 
-        try:
-            log_content = ""; file_size = os.path.getsize(log_path)
-            max_log_kb = 100; max_tg_msg = 4096
-            if file_size == 0: log_content = "(Log empty)"
-            elif file_size > max_log_kb * 1024:
-                 with open(log_path, 'rb') as f: f.seek(-max_log_kb * 1024, os.SEEK_END); log_bytes = f.read()
-                 log_content = log_bytes.decode('utf-8', errors='ignore')
-                 log_content = f"(Last {max_log_kb} KB)\n...\n" + log_content
-            else:
-                 with open(log_path, 'r', encoding='utf-8', errors='ignore') as f: log_content = f.read()
-
-            if len(log_content) > max_tg_msg:
-                log_content = log_content[-max_tg_msg:]
-                first_nl = log_content.find('\n')
-                if first_nl != -1: log_content = "...\n" + log_content[first_nl+1:]
-                else: log_content = "...\n" + log_content 
-            if not log_content.strip(): log_content = "(No visible content)"
-
-            bot.send_message(chat_id_for_reply, f"📜 Logs for `{file_name}` (User `{script_owner_id}`):\n```\n{log_content}\n```", parse_mode='Markdown')
-        except Exception as e:
-            logger.error(f"Error reading/sending log {log_path}: {e}", exc_info=True)
-            bot.send_message(chat_id_for_reply, f"❌ Error reading log for `{file_name}`.")
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing logs callback '{call.data}': {e}")
-        bot.answer_callback_query(call.id, "Error: Invalid logs command.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in logs_bot_callback for '{call.data}': {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error fetching logs.", show_alert=True)
-
-def speed_callback(call):
-    user_id = call.from_user.id
-    chat_id = call.message.chat.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.answer_callback_query(call.id, "❌ You are banned from using this bot.", show_alert=True)
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_text(subscription_message, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        except:
-            bot.send_message(chat_id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    start_cb_ping_time = time.time() 
-    try:
-        bot.edit_message_text("🏃 Testing speed...", chat_id, call.message.message_id)
-        bot.send_chat_action(chat_id, 'typing') 
-        response_time = round((time.time() - start_cb_ping_time) * 1000, 2)
-        status = "🔓 Unlocked" if not bot_locked else "🔒 Locked"
-        if user_id == OWNER_ID: user_level = "👑 Owner"
-        elif user_id in admin_ids: user_level = "🛡️ Admin"
-        elif user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now(): user_level = "⭐ Premium"
-        else: user_level = "🆓 Free User"
-        speed_msg = (f"⚡ Bot Speed & Status:\n\n⏱️ API Response Time: {response_time} ms\n"
-                     f"🚦 Bot Status: {status}\n"
-                     f"👤 Your Level: {user_level}")
-        bot.answer_callback_query(call.id) 
-        bot.edit_message_text(speed_msg, chat_id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
-    except Exception as e:
-         logger.error(f"Error during speed test (cb): {e}", exc_info=True)
-         bot.answer_callback_query(call.id, "Error in speed test.", show_alert=True)
-         try: bot.edit_message_text("〽️ Main Menu", chat_id, call.message.message_id, reply_markup=create_main_menu_inline(user_id))
-         except Exception: pass
-
-def back_to_main_callback(call):
-    user_id = call.from_user.id
-    chat_id = call.message.chat.id
-    
-    # Check if user is banned
-    if is_user_banned(user_id):
-        bot.answer_callback_query(call.id, "❌ You are banned from using this bot.", show_alert=True)
-        return
-    
-    # Check mandatory subscription first
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    if not is_subscribed and user_id not in admin_ids:
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        bot.answer_callback_query(call.id)
-        try:
-            bot.edit_message_text(subscription_message, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        except:
-            bot.send_message(chat_id, subscription_message, reply_markup=markup, parse_mode='Markdown')
-        return
-        
-    file_limit = get_user_file_limit(user_id)
-    current_files = get_user_file_count(user_id)
-    limit_str = str(file_limit) if file_limit != float('inf') else "Unlimited"
-    expiry_info = ""
-    if user_id == OWNER_ID: user_status = "👑 Owner"
-    elif user_id in admin_ids: user_status = "🛡️ Admin"
-    elif user_id in user_subscriptions:
-        expiry_date = user_subscriptions[user_id].get('expiry')
-        if expiry_date and expiry_date > datetime.now():
-            user_status = "⭐ Premium"; days_left = (expiry_date - datetime.now()).days
-            expiry_info = f"\n⏳ Subscription expires in: {days_left} days"
-        else: user_status = "🆓 Free User (Expired Sub)"
-    else: user_status = "🆓 Free User"
-    main_menu_text = (f"〽️ Welcome back, {call.from_user.first_name}!\n\n🆔 ID: `{user_id}`\n"
-                      f"🔰 Status: {user_status}{expiry_info}\n📁 Files: {current_files} / {limit_str}\n\n"
-                      f"👇 Use buttons or type commands.")
-    try:
-        bot.answer_callback_query(call.id)
-        bot.edit_message_text(main_menu_text, chat_id, call.message.message_id,
-                              reply_markup=create_main_menu_inline(user_id), parse_mode='Markdown')
-    except telebot.apihelper.ApiTelegramException as e:
-         if "message is not modified" in str(e): logger.warning("Msg not modified (back_to_main).")
-         else: logger.error(f"API error on back_to_main: {e}")
-    except Exception as e: logger.error(f"Error handling back_to_main: {e}", exc_info=True)
-
-# --- Admin Callback Implementations (for Inline Buttons) ---
-def subscription_management_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        bot.edit_message_text("💳 Subscription Management\nSelect action:",
-                              call.message.chat.id, call.message.message_id, reply_markup=create_subscription_menu())
-    except Exception as e: logger.error(f"Error showing sub menu: {e}")
-
-def stats_callback(call):
-    bot.answer_callback_query(call.id)
-    _logic_statistics(call.message) 
-    try:
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
-                                      reply_markup=create_main_menu_inline(call.from_user.id))
-    except Exception as e:
-        logger.error(f"Error updating menu after stats_callback: {e}")
-
-def lock_bot_callback(call):
-    global bot_locked; bot_locked = True
-    logger.warning(f"Bot locked by Admin {call.from_user.id}")
-    bot.answer_callback_query(call.id, "🔒 Bot locked.")
-    try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(call.from_user.id))
-    except Exception as e: logger.error(f"Error updating menu (lock): {e}")
-
-def unlock_bot_callback(call):
-    global bot_locked; bot_locked = False
-    logger.warning(f"Bot unlocked by Admin {call.from_user.id}")
-    bot.answer_callback_query(call.id, "🔓 Bot unlocked.")
-    try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=create_main_menu_inline(call.from_user.id))
-    except Exception as e: logger.error(f"Error updating menu (unlock): {e}")
-
-def run_all_scripts_callback(call):
-    _logic_run_all_scripts(call)
-
-def broadcast_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "📢 Send message to broadcast.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_broadcast_message)
-
-def process_broadcast_message(message):
-    user_id = message.from_user.id
-    if user_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    if message.text and message.text.lower() == '/cancel': bot.reply_to(message, "Broadcast cancelled."); return
-
-    broadcast_content = message.text
-    if not broadcast_content and not (message.photo or message.video or message.document or message.sticker or message.voice or message.audio):
-         bot.reply_to(message, "⚠️ Cannot broadcast empty message. Send text or media, or /cancel.")
-         msg = bot.send_message(message.chat.id, "📢 Send broadcast message or /cancel.")
-         bot.register_next_step_handler(msg, process_broadcast_message)
-         return
-
-    target_count = len(active_users)
-    markup = types.InlineKeyboardMarkup()
-    markup.row(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"confirm_broadcast_{message.message_id}"),
-               types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast"))
-
-    preview_text = broadcast_content[:1000].strip() if broadcast_content else "(Media message)"
-    bot.reply_to(message, f"⚠️ Confirm Broadcast:\n\n```\n{preview_text}\n```\n" 
-                          f"To **{target_count}** users. Sure?", reply_markup=markup, parse_mode='Markdown')
-
-def handle_confirm_broadcast(call):
-    user_id = call.from_user.id
-    chat_id = call.message.chat.id
-    if user_id not in admin_ids: bot.answer_callback_query(call.id, "⚠️ Admin only.", show_alert=True); return
-    try:
-        original_message = call.message.reply_to_message
-        if not original_message: raise ValueError("Could not retrieve original message.")
-
-        broadcast_text = None
-        broadcast_photo_id = None
-        broadcast_video_id = None
-
-        if original_message.text:
-            broadcast_text = original_message.text
-        elif original_message.photo:
-            broadcast_photo_id = original_message.photo[-1].file_id
-        elif original_message.video:
-            broadcast_video_id = original_message.video.file_id
-        else:
-            raise ValueError("Message has no text or supported media for broadcast.")
-
-        bot.answer_callback_query(call.id, "🚀 Starting broadcast...")
-        bot.edit_message_text(f"📢 Broadcasting to {len(active_users)} users...",
-                              chat_id, call.message.message_id, reply_markup=None)
-        thread = threading.Thread(target=execute_broadcast, args=(
-            broadcast_text, broadcast_photo_id, broadcast_video_id, 
-            original_message.caption if (broadcast_photo_id or broadcast_video_id) else None,
-            chat_id))
-        thread.start()
-    except ValueError as ve: 
-        logger.error(f"Error retrieving msg for broadcast confirm: {ve}")
-        bot.edit_message_text(f"❌ Error starting broadcast: {ve}", chat_id, call.message.message_id, reply_markup=None)
-    except Exception as e:
-        logger.error(f"Error in handle_confirm_broadcast: {e}", exc_info=True)
-        bot.edit_message_text("❌ Unexpected error during broadcast confirm.", chat_id, call.message.message_id, reply_markup=None)
-
-def handle_cancel_broadcast(call):
-    bot.answer_callback_query(call.id, "Broadcast cancelled.")
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    if call.message.reply_to_message:
-        try: bot.delete_message(call.message.chat.id, call.message.reply_to_message.message_id)
-        except: pass
-
-def execute_broadcast(broadcast_text, photo_id, video_id, caption, admin_chat_id):
-    sent_count = 0; failed_count = 0; blocked_count = 0
-    start_exec_time = time.time() 
-    users_to_broadcast = list(active_users); total_users = len(users_to_broadcast)
-    logger.info(f"Executing broadcast to {total_users} users.")
-    batch_size = 25; delay_batches = 1.5
-
-    for i, user_id_bc in enumerate(users_to_broadcast):
-        try:
-            if broadcast_text:
-                bot.send_message(user_id_bc, broadcast_text, parse_mode='Markdown')
-            elif photo_id:
-                bot.send_photo(user_id_bc, photo_id, caption=caption, parse_mode='Markdown' if caption else None)
-            elif video_id:
-                bot.send_video(user_id_bc, video_id, caption=caption, parse_mode='Markdown' if caption else None)
-            sent_count += 1
-        except telebot.apihelper.ApiTelegramException as e:
-            err_desc = str(e).lower()
-            if any(s in err_desc for s in ["bot was blocked", "user is deactivated", "chat not found", "kicked from", "restricted"]): 
-                logger.warning(f"Broadcast failed to {user_id_bc}: User blocked/inactive.")
-                blocked_count += 1
-            elif "flood control" in err_desc or "too many requests" in err_desc:
-                retry_after = 5; match = re.search(r"retry after (\d+)", err_desc)
-                if match: retry_after = int(match.group(1)) + 1 
-                logger.warning(f"Flood control. Sleeping {retry_after}s...")
-                time.sleep(retry_after)
-                try:
-                    if broadcast_text: bot.send_message(user_id_bc, broadcast_text, parse_mode='Markdown')
-                    elif photo_id: bot.send_photo(user_id_bc, photo_id, caption=caption, parse_mode='Markdown' if caption else None)
-                    elif video_id: bot.send_video(user_id_bc, video_id, caption=caption, parse_mode='Markdown' if caption else None)
-                    sent_count += 1
-                except Exception as e_retry: logger.error(f"Broadcast retry failed to {user_id_bc}: {e_retry}"); failed_count +=1
-            else: logger.error(f"Broadcast failed to {user_id_bc}: {e}"); failed_count += 1
-        except Exception as e: logger.error(f"Unexpected error broadcasting to {user_id_bc}: {e}"); failed_count += 1
-
-        if (i + 1) % batch_size == 0 and i < total_users - 1:
-            logger.info(f"Broadcast batch {i//batch_size + 1} sent. Sleeping {delay_batches}s...")
-            time.sleep(delay_batches)
-        elif i % 5 == 0: time.sleep(0.2) 
-
-    duration = round(time.time() - start_exec_time, 2)
-    result_msg = (f"📢 Broadcast Complete!\n\n✅ Sent: {sent_count}\n❌ Failed: {failed_count}\n"
-                  f"🚫 Blocked/Inactive: {blocked_count}\n👥 Targets: {total_users}\n⏱️ Duration: {duration}s")
-    logger.info(result_msg)
-    try: bot.send_message(admin_chat_id, result_msg)
-    except Exception as e: logger.error(f"Failed to send broadcast result to admin {admin_chat_id}: {e}")
-
-def admin_panel_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        bot.edit_message_text("👑 Admin Panel\nManage admins (Owner actions may be restricted).",
-                              call.message.chat.id, call.message.message_id, reply_markup=create_admin_panel())
-    except Exception as e: logger.error(f"Error showing admin panel: {e}")
-
-def add_admin_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "👑 Enter User ID to promote to Admin.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_add_admin_id)
-
-def process_add_admin_id(message):
-    owner_id_check = message.from_user.id 
-    if owner_id_check != OWNER_ID: bot.reply_to(message, "⚠️ Owner only."); return
-    if message.text.lower() == '/cancel': bot.reply_to(message, "Admin promotion cancelled."); return
-    try:
-        new_admin_id = int(message.text.strip())
-        if new_admin_id <= 0: raise ValueError("ID must be positive")
-        if new_admin_id == OWNER_ID: bot.reply_to(message, "⚠️ Owner is already Owner."); return
-        if new_admin_id in admin_ids: bot.reply_to(message, f"⚠️ User `{new_admin_id}` already Admin."); return
-        add_admin_db(new_admin_id, owner_id_check) 
-        logger.warning(f"Admin {new_admin_id} added by Owner {owner_id_check}.")
-        bot.reply_to(message, f"✅ User `{new_admin_id}` promoted to Admin.")
-        try: bot.send_message(new_admin_id, "🎉 Congrats! You are now an Admin.")
-        except Exception as e: logger.error(f"Failed to notify new admin {new_admin_id}: {e}")
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
-        msg = bot.send_message(message.chat.id, "👑 Enter User ID to promote or /cancel.")
-        bot.register_next_step_handler(msg, process_add_admin_id)
-    except Exception as e: logger.error(f"Error processing add admin: {e}", exc_info=True); bot.reply_to(message, "Error.")
-
-def remove_admin_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "👑 Enter User ID of Admin to remove.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_remove_admin_id)
-
-def process_remove_admin_id(message):
-    owner_id_check = message.from_user.id
-    if owner_id_check != OWNER_ID: bot.reply_to(message, "⚠️ Owner only."); return
-    if message.text.lower() == '/cancel': bot.reply_to(message, "Admin removal cancelled."); return
-    try:
-        admin_id_remove = int(message.text.strip())
-        if admin_id_remove <= 0: raise ValueError("ID must be positive")
-        if admin_id_remove == OWNER_ID: bot.reply_to(message, "⚠️ Owner cannot remove self."); return
-        if admin_id_remove not in admin_ids: bot.reply_to(message, f"⚠️ User `{admin_id_remove}` not Admin."); return
-        if remove_admin_db(admin_id_remove): 
-            logger.warning(f"Admin {admin_id_remove} removed by Owner {owner_id_check}.")
-            bot.reply_to(message, f"✅ Admin `{admin_id_remove}` removed.")
-            try: bot.send_message(admin_id_remove, "ℹ️ You are no longer an Admin.")
-            except Exception as e: logger.error(f"Failed to notify removed admin {admin_id_remove}: {e}")
-        else: bot.reply_to(message, f"❌ Failed to remove admin `{admin_id_remove}`. Check logs.")
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
-        msg = bot.send_message(message.chat.id, "👑 Enter Admin ID to remove or /cancel.")
-        bot.register_next_step_handler(msg, process_remove_admin_id)
-    except Exception as e: logger.error(f"Error processing remove admin: {e}", exc_info=True); bot.reply_to(message, "Error.")
-
-def list_admins_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        admin_list_str = "\n".join(f"- `{aid}` {'(Owner)' if aid == OWNER_ID else ''}" for aid in sorted(list(admin_ids)))
-        if not admin_list_str: admin_list_str = "(No Owner/Admins configured!)"
-        bot.edit_message_text(f"👑 Current Admins:\n\n{admin_list_str}", call.message.chat.id,
-                              call.message.message_id, reply_markup=create_admin_panel(), parse_mode='Markdown')
-    except Exception as e: logger.error(f"Error listing admins: {e}")
-
-def add_subscription_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID & days (e.g., `12345678 30`).\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_add_subscription_details)
-
-def process_add_subscription_details(message):
-    admin_id_check = message.from_user.id 
-    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub add cancelled."); return
-    try:
-        parts = message.text.split();
-        if len(parts) != 2: raise ValueError("Incorrect format")
-        sub_user_id = int(parts[0].strip()); days = int(parts[1].strip())
-        if sub_user_id <= 0 or days <= 0: raise ValueError("User ID/days must be positive")
-
-        current_expiry = user_subscriptions.get(sub_user_id, {}).get('expiry')
-        start_date_new_sub = datetime.now()
-        if current_expiry and current_expiry > start_date_new_sub: start_date_new_sub = current_expiry
-        new_expiry = start_date_new_sub + timedelta(days=days)
-        save_subscription(sub_user_id, new_expiry)
-
-        logger.info(f"Sub for {sub_user_id} by admin {admin_id_check}. Expiry: {new_expiry:%Y-%m-%d}")
-        bot.reply_to(message, f"✅ Sub for `{sub_user_id}` by {days} days.\nNew expiry: {new_expiry:%Y-%m-%d}")
-        try: bot.send_message(sub_user_id, f"🎉 Sub activated/extended by {days} days! Expires: {new_expiry:%Y-%m-%d}.")
-        except Exception as e: logger.error(f"Failed to notify {sub_user_id} of new sub: {e}")
-    except ValueError as e:
-        bot.reply_to(message, f"⚠️ Invalid: {e}. Format: `ID days` or /cancel.")
-        msg = bot.send_message(message.chat.id, "💳 Enter User ID & days, or /cancel.")
-        bot.register_next_step_handler(msg, process_add_subscription_details)
-    except Exception as e: logger.error(f"Error processing add sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
-
-def remove_subscription_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID to remove sub.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_remove_subscription_id)
-
-def process_remove_subscription_id(message):
-    admin_id_check = message.from_user.id
-    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub removal cancelled."); return
-    try:
-        sub_user_id_remove = int(message.text.strip())
-        if sub_user_id_remove <= 0: raise ValueError("ID must be positive")
-        if sub_user_id_remove not in user_subscriptions:
-            bot.reply_to(message, f"⚠️ User `{sub_user_id_remove}` no active sub in memory."); return
-        remove_subscription_db(sub_user_id_remove) 
-        logger.warning(f"Sub removed for {sub_user_id_remove} by admin {admin_id_check}.")
-        bot.reply_to(message, f"✅ Sub for `{sub_user_id_remove}` removed.")
-        try: bot.send_message(sub_user_id_remove, "ℹ️ Your subscription removed by admin.")
-        except Exception as e: logger.error(f"Failed to notify {sub_user_id_remove} of sub removal: {e}")
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
-        msg = bot.send_message(message.chat.id, "💳 Enter User ID to remove sub from, or /cancel.")
-        bot.register_next_step_handler(msg, process_remove_subscription_id)
-    except Exception as e: logger.error(f"Error processing remove sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
-
-def check_subscription_init_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "💳 Enter User ID to check sub.\n/cancel to abort.")
-    bot.register_next_step_handler(msg, process_check_subscription_id)
-
-def process_check_subscription_id(message):
-    admin_id_check = message.from_user.id
-    if admin_id_check not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    if message.text.lower() == '/cancel': bot.reply_to(message, "Sub check cancelled."); return
-    try:
-        sub_user_id_check = int(message.text.strip())
-        if sub_user_id_check <= 0: raise ValueError("ID must be positive")
-        if sub_user_id_check in user_subscriptions:
-            expiry_dt = user_subscriptions[sub_user_id_check].get('expiry')
-            if expiry_dt:
-                if expiry_dt > datetime.now():
-                    days_left = (expiry_dt - datetime.now()).days
-                    bot.reply_to(message, f"✅ User `{sub_user_id_check}` active sub.\nExpires: {expiry_dt:%Y-%m-%d %H:%M:%S} ({days_left} days left).")
-                else:
-                    bot.reply_to(message, f"⚠️ User `{sub_user_id_check}` expired sub (On: {expiry_dt:%Y-%m-%d %H:%M:%S}).")
-                    remove_subscription_db(sub_user_id_check)
-            else: bot.reply_to(message, f"⚠️ User `{sub_user_id_check}` in sub list, but expiry missing. Re-add if needed.")
-        else: bot.reply_to(message, f"ℹ️ User `{sub_user_id_check}` no active sub record.")
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid ID. Send numerical ID or /cancel.")
-        msg = bot.send_message(message.chat.id, "💳 Enter User ID to check, or /cancel.")
-        bot.register_next_step_handler(msg, process_check_subscription_id)
-    except Exception as e: logger.error(f"Error processing check sub: {e}", exc_info=True); bot.reply_to(message, "Error.")
-
-# --- User Management Callbacks ---
-def user_management_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        bot.edit_message_text("👥 User Management\nSelect action:", call.message.chat.id, 
-                              call.message.message_id, reply_markup=create_user_management_menu())
-    except Exception as e: logger.error(f"Error showing user management menu: {e}")
-
-def ban_user_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "🚫 Enter User ID to ban and reason (e.g., `12345678 Spamming`)\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_ban_user)
-
-def process_ban_user(message):
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Ban cancelled.")
-        return
-    
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "⚠️ Format: `user_id reason`\nExample: `12345678 Spamming`")
-            return
-        
-        user_id = int(parts[0])
-        reason = ' '.join(parts[1:])
-        
-        if user_id <= 0: raise ValueError("ID must be positive")
-        if user_id == OWNER_ID: bot.reply_to(message, "⚠️ Cannot ban owner."); return
-        if user_id in admin_ids: bot.reply_to(message, "⚠️ Cannot ban admin."); return
-        
-        if ban_user_db(user_id, reason, admin_id):
-            bot.reply_to(message, f"✅ User `{user_id}` banned.\nReason: {reason}")
-            for file_name, _ in user_files.get(user_id, []):
-                script_key = f"{user_id}_{file_name}"
-                if script_key in bot_scripts:
-                    kill_process_tree(bot_scripts[script_key])
-                    del bot_scripts[script_key]
-            
-            try:
-                bot.send_message(user_id, f"🚫 You have been banned from using this bot.\nReason: {reason}")
-            except Exception as e:
-                logger.error(f"Failed to notify banned user {user_id}: {e}")
-        else:
-            bot.reply_to(message, "❌ Failed to ban user.")
-            
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid user ID. Must be a number.")
-    except Exception as e:
-        logger.error(f"Error banning user: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-def unban_user_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "✅ Enter User ID to unban\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_unban_user)
-
-def process_unban_user(message):
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Unban cancelled.")
-        return
-    
-    try:
-        user_id = int(message.text.strip())
-        if user_id <= 0: raise ValueError("ID must be positive")
-        
-        if user_id not in banned_users:
-            bot.reply_to(message, f"ℹ️ User `{user_id}` is not banned.")
-            return
-        
-        if unban_user_db(user_id):
-            bot.reply_to(message, f"✅ User `{user_id}` unbanned.")
-            try:
-                bot.send_message(user_id, "✅ Your ban has been lifted. You can now use the bot again.")
-            except Exception as e:
-                logger.error(f"Failed to notify unbanned user {user_id}: {e}")
-        else:
-            bot.reply_to(message, "❌ Failed to unban user.")
-            
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid user ID. Must be a number.")
-    except Exception as e:
-        logger.error(f"Error unbanning user: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-def user_info_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "👤 Enter User ID to get info\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_user_info)
-
-def process_user_info(message):
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Info request cancelled.")
-        return
-    
-    try:
-        user_id = int(message.text.strip())
-        if user_id <= 0: raise ValueError("ID must be positive")
-        
-        info_parts = []
-        info_parts.append(f"👤 **User ID:** `{user_id}`")
-        
-        if user_id == OWNER_ID:
-            info_parts.append("👑 **Status:** Owner")
-        elif user_id in admin_ids:
-            info_parts.append("🛡️ **Status:** Admin")
-        elif user_id in banned_users:
-            info_parts.append("🚫 **Status:** Banned")
-        elif user_id in user_subscriptions:
-            expiry = user_subscriptions[user_id].get('expiry')
-            if expiry and expiry > datetime.now():
-                days_left = (expiry - datetime.now()).days
-                info_parts.append(f"⭐ **Status:** Premium (Expires in {days_left} days)")
-            else:
-                info_parts.append("🆓 **Status:** Free User (Expired subscription)")
-        else:
-            info_parts.append("🆓 **Status:** Free User")
-        
-        file_count = get_user_file_count(user_id)
-        file_limit = get_user_file_limit(user_id)
-        info_parts.append(f"📁 **Files:** {file_count}/{file_limit if file_limit != float('inf') else 'Unlimited'}")
-        
-        if user_id in user_limits:
-            info_parts.append(f"⚙️ **Custom Limit:** {user_limits[user_id]}")
-        
-        running_scripts = 0
-        for file_name, _ in user_files.get(user_id, []):
-            if is_bot_running(user_id, file_name):
-                running_scripts += 1
-        info_parts.append(f"🤖 **Running Scripts:** {running_scripts}")
-        
-        if user_id in active_users:
-            info_parts.append("🟢 **Status:** Active")
-        
-        info_text = "\n".join(info_parts)
-        bot.reply_to(message, info_text, parse_mode='Markdown')
-        
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid user ID. Must be a number.")
-    except Exception as e:
-        logger.error(f"Error getting user info: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-def all_users_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        if not active_users:
-            bot.edit_message_text("👥 No active users yet.", call.message.chat.id, call.message.message_id)
-            return
-        
-        users_list = list(active_users)
-        chunk_size = 20
-        total_pages = (len(users_list) + chunk_size - 1) // chunk_size
-        
-        current_page = 0
-        display_users_list(call.message.chat.id, call.message.message_id, users_list, current_page, total_pages, chunk_size)
-        
-    except Exception as e:
-        logger.error(f"Error displaying all users: {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error displaying users.", show_alert=True)
-
-def display_users_list(chat_id, message_id, users_list, page, total_pages, chunk_size):
-    start_idx = page * chunk_size
-    end_idx = min(start_idx + chunk_size, len(users_list))
-    
-    user_chunk = users_list[start_idx:end_idx]
-    
-    message_text = f"👥 **Active Users** (Page {page + 1}/{total_pages})\n\n"
-    for i, user_id in enumerate(user_chunk, start=start_idx + 1):
-        status = ""
-        if user_id == OWNER_ID: status = "👑"
-        elif user_id in admin_ids: status = "🛡️"
-        elif user_id in banned_users: status = "🚫"
-        elif user_id in user_subscriptions and user_subscriptions[user_id].get('expiry', datetime.min) > datetime.now():
-            status = "⭐"
-        else: status = "🆓"
-        
-        message_text += f"{i}. `{user_id}` {status}\n"
-    
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    
-    if total_pages > 1:
-        page_buttons = []
-        if page > 0:
-            page_buttons.append(types.InlineKeyboardButton("⬅️ Previous", callback_data=f"users_page_{page-1}"))
-        
-        page_buttons.append(types.InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
-        
-        if page < total_pages - 1:
-            page_buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"users_page_{page+1}"))
-        
-        markup.row(*page_buttons)
-    
-    markup.row(types.InlineKeyboardButton("🔙 Back to User Management", callback_data='user_management'))
-    
-    try:
-        bot.edit_message_text(message_text, chat_id, message_id, reply_markup=markup, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error editing users list: {e}")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('users_page_'))
-def handle_users_page(call):
-    if call.from_user.id not in admin_ids:
-        bot.answer_callback_query(call.id, "⚠️ Admin only.", show_alert=True)
-        return
-    
-    try:
-        page = int(call.data.split('_')[2])
-        users_list = list(active_users)
-        chunk_size = 20
-        total_pages = (len(users_list) + chunk_size - 1) // chunk_size
-        
-        if 0 <= page < total_pages:
-            bot.answer_callback_query(call.id)
-            display_users_list(call.message.chat.id, call.message.message_id, users_list, page, total_pages, chunk_size)
-    except Exception as e:
-        logger.error(f"Error handling users page: {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error.", show_alert=True)
-
-def set_user_limit_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "🔧 Enter User ID and new limit (e.g., `12345678 50`)\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_set_user_limit)
-
-def process_set_user_limit(message):
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Limit set cancelled.")
-        return
-    
-    try:
-        parts = message.text.split()
-        if len(parts) != 2: raise ValueError("Format: user_id limit")
-        
-        user_id = int(parts[0])
-        limit = int(parts[1])
-        
-        if user_id <= 0 or limit <= 0: raise ValueError("ID and limit must be positive")
-        
-        if set_user_limit_db(user_id, limit, admin_id):
-            bot.reply_to(message, f"✅ Set file limit {limit} for user `{user_id}`")
-            try:
-                bot.send_message(user_id, f"⚙️ Your file upload limit has been set to {limit}")
-            except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
-        else:
-            bot.reply_to(message, "❌ Failed to set limit.")
-            
-    except ValueError as e:
-        bot.reply_to(message, f"⚠️ Invalid input: {e}\nFormat: `user_id limit`")
-    except Exception as e:
-        logger.error(f"Error setting user limit: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-def remove_user_limit_callback(call):
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "🗑️ Enter User ID to remove custom limit\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_remove_user_limit)
-
-def process_remove_user_limit(message):
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids: bot.reply_to(message, "⚠️ Not authorized."); return
-    
-    if message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Limit removal cancelled.")
-        return
-    
-    try:
-        user_id = int(message.text.strip())
-        if user_id <= 0: raise ValueError("ID must be positive")
-        
-        if user_id not in user_limits:
-            bot.reply_to(message, f"ℹ️ User `{user_id}` has no custom limit.")
-            return
-        
-        if remove_user_limit_db(user_id):
-            bot.reply_to(message, f"✅ Removed custom limit for user `{user_id}`")
-            try:
-                bot.send_message(user_id, "⚙️ Your custom file limit has been removed")
-            except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
-        else:
-            bot.reply_to(message, "❌ Failed to remove limit.")
-            
-    except ValueError:
-        bot.reply_to(message, "⚠️ Invalid user ID. Must be a number.")
-    except Exception as e:
-        logger.error(f"Error removing user limit: {e}", exc_info=True)
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-# --- Admin Settings Callbacks ---
-def admin_settings_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        bot.edit_message_text("⚙️ Admin Settings\nSelect action:", call.message.chat.id, 
-                              call.message.message_id, reply_markup=create_admin_settings_menu())
-    except Exception as e: logger.error(f"Error showing admin settings: {e}")
-
-def system_info_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        import platform
-        
-        info_parts = []
-        
-        info_parts.append("🤖 **Bot Information:**")
-        info_parts.append(f"• Python: {platform.python_version()}")
-        info_parts.append(f"• Platform: {platform.platform()}")
-        info_parts.append(f"• Uptime: {time.strftime('%H:%M:%S', time.gmtime(time.time() - psutil.boot_time()))}")
-        
-        info_parts.append("\n💻 **System Information:**")
-        try:
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            
-            info_parts.append(f"• CPU Usage: {cpu_percent}%")
-            info_parts.append(f"• Memory: {memory.percent}% used ({memory.used//1024//1024}MB/{memory.total//1024//1024}MB)")
-            info_parts.append(f"• Disk: {disk.percent}% used ({disk.used//1024//1024}MB/{disk.total//1024//1024}MB)")
-        except Exception as e:
-            info_parts.append(f"• System stats error: {str(e)}")
-        
-        info_parts.append("\n📊 **Bot Statistics:**")
-        info_parts.append(f"• Active Users: {len(active_users)}")
-        info_parts.append(f"• Running Scripts: {len(bot_scripts)}")
-        info_parts.append(f"• Total Files: {sum(len(files) for files in user_files.values())}")
-        info_parts.append(f"• Bot Status: {'🔒 Locked' if bot_locked else '🔓 Unlocked'}")
-        
-        info_text = "\n".join(info_parts)
-        
-        bot.edit_message_text(info_text, call.message.chat.id, call.message.message_id, 
-                              reply_markup=create_admin_settings_menu(), parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error showing system info: {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error showing system info.", show_alert=True)
-
-def bot_performance_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        performance_parts = []
-        
-        running_scripts = len(bot_scripts)
-        total_files = sum(len(files) for files in user_files.values())
-        
-        performance_parts.append("📈 **Bot Performance Metrics:**")
-        performance_parts.append(f"• Running Scripts: {running_scripts}")
-        performance_parts.append(f"• Total Scripts: {total_files}")
-        performance_parts.append(f"• Uptime Ratio: {running_scripts}/{total_files} ({running_scripts/total_files*100:.1f}% if total > 0)")
-        
-        try:
-            bot_process = psutil.Process()
-            memory_usage = bot_process.memory_info().rss / 1024 / 1024
-            cpu_usage = bot_process.cpu_percent(interval=0.5)
-            
-            performance_parts.append(f"\n💾 **Resource Usage:**")
-            performance_parts.append(f"• Memory: {memory_usage:.1f} MB")
-            performance_parts.append(f"• CPU: {cpu_usage:.1f}%")
-        except Exception as e:
-            performance_parts.append(f"\n⚠️ Resource stats error: {str(e)}")
-        
-        performance_parts.append(f"\n🗄️ **Database:**")
-        performance_parts.append(f"• Active Users: {len(active_users)}")
-        performance_parts.append(f"• Subscriptions: {len(user_subscriptions)}")
-        performance_parts.append(f"• Banned Users: {len(banned_users)}")
-        performance_parts.append(f"• Custom Limits: {len(user_limits)}")
-        
-        performance_text = "\n".join(performance_parts)
-        
-        bot.edit_message_text(performance_text, call.message.chat.id, call.message.message_id,
-                              reply_markup=create_admin_settings_menu(), parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error showing performance: {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error showing performance.", show_alert=True)
-
-def cleanup_files_callback(call):
-    bot.answer_callback_query(call.id, "🧹 Cleaning up temporary files...")
-    
-    try:
-        cleaned_dirs = 0
-        cleaned_files = 0
-        
-        for user_dir in os.listdir(UPLOAD_BOTS_DIR):
-            user_path = os.path.join(UPLOAD_BOTS_DIR, user_dir)
-            if os.path.isdir(user_path):
-                if not os.listdir(user_path):
-                    try:
-                        os.rmdir(user_path)
-                        cleaned_dirs += 1
-                    except Exception as e:
-                        logger.error(f"Error removing empty dir {user_path}: {e}")
-                
-                else:
-                    for file_name in os.listdir(user_path):
-                        if file_name.endswith('.log'):
-                            file_path = os.path.join(user_path, file_name)
-                            try:
-                                file_age = time.time() - os.path.getmtime(file_path)
-                                if file_age > 7 * 24 * 3600:
-                                    os.remove(file_path)
-                                    cleaned_files += 1
-                            except Exception as e:
-                                logger.error(f"Error cleaning log file {file_path}: {e}")
-        
-        result_msg = f"🧹 **Cleanup Complete:**\n• Removed empty directories: {cleaned_dirs}\n• Cleared old log files: {cleaned_files}"
-        
-        bot.edit_message_text(result_msg, call.message.chat.id, call.message.message_id,
-                              reply_markup=create_admin_settings_menu(), parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Error during cleanup: {e}", exc_info=True)
-        bot.edit_message_text(f"❌ Cleanup error: {str(e)}", call.message.chat.id, call.message.message_id)
-
-def install_logs_callback(call):
-    bot.answer_callback_query(call.id)
-    try:
-        with DB_LOCK:
-            conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
-            c = conn.cursor()
-            c.execute('SELECT user_id, module_name, package_name, status, install_date FROM install_logs ORDER BY install_date DESC LIMIT 20')
-            logs = c.fetchall()
-            conn.close()
-        
-        if not logs:
-            bot.edit_message_text("📋 **No installation logs found**", call.message.chat.id, 
-                                  call.message.message_id, reply_markup=create_admin_settings_menu())
-            return
-        
-        log_text = "📋 **Recent Installation Logs (Last 20):**\n\n"
-        for user_id, module_name, package_name, status, install_date in logs:
-            status_icon = "✅" if status == "success" else "❌" if status == "failed" else "⚠️"
-            log_text += f"{status_icon} `{user_id}`: {module_name} -> {package_name}\n"
-            log_text += f"   📅 {install_date[:19]}\n\n"
-        
-        bot.edit_message_text(log_text, call.message.chat.id, call.message.message_id,
-                              reply_markup=create_admin_settings_menu(), parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Error showing install logs: {e}", exc_info=True)
-        bot.answer_callback_query(call.id, "Error showing logs.", show_alert=True)
-
-def admin_install_callback(call):
-    bot.answer_callback_query(call.id)
-    _logic_admin_install(call.message)
-
-# --- Mandatory Channels Callbacks ---
-def manage_mandatory_channels_callback(call):
-    """Handle mandatory channels management request"""
-    bot.answer_callback_query(call.id)
-    try:
-        bot.edit_message_text("📢 Manage Mandatory Channels\nChoose desired action:",
-                              call.message.chat.id, call.message.message_id, 
-                              reply_markup=create_mandatory_channels_menu())
-    except Exception as e:
-        logger.error(f"Error showing channel management menu: {e}")
-
-def add_mandatory_channel_callback(call):
-    """Add new mandatory channel"""
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "📢 Send channel ID or username (example: @channel_username or -1001234567890)\n/cancel to cancel")
-    bot.register_next_step_handler(msg, process_add_channel)
-
-def process_add_channel(message):
-    """Process channel addition"""
-    admin_id = message.from_user.id
-    if admin_id not in admin_ids:
-        bot.reply_to(message, "⚠️ Not authorized.")
-        return
-        
-    if message.text and message.text.lower() == '/cancel':
-        bot.reply_to(message, "❌ Channel addition cancelled.")
-        return
-        
-    channel_identifier = message.text.strip()
-    
-    try:
-        chat = bot.get_chat(channel_identifier)
-        channel_id = str(chat.id)
-        channel_username = f"@{chat.username}" if chat.username else ""
-        channel_name = chat.title
-        
-        try:
-            bot_member = bot.get_chat_member(channel_id, bot.get_me().id)
-            if bot_member.status not in ['administrator', 'creator']:
-                bot.reply_to(message, f"❌ Bot is not admin in the channel! Must be promoted first.")
-                return
-        except Exception as e:
-            bot.reply_to(message, f"❌ Bot is not admin in the channel or cannot access it!")
-            return
-            
-        if save_mandatory_channel(channel_id, channel_username, channel_name, admin_id):
-            bot.reply_to(message, f"✅ Mandatory channel added:\n**{channel_name}**\n{channel_username or channel_id}")
-        else:
-            bot.reply_to(message, "❌ Failed to add channel. Try again.")
-            
-    except Exception as e:
-        logger.error(f"Error adding channel: {e}")
-        bot.reply_to(message, f"❌ Error adding channel: {str(e)}")
-
-def remove_mandatory_channel_callback(call):
-    """Remove mandatory channel"""
-    if not mandatory_channels:
-        bot.answer_callback_query(call.id, "❌ No mandatory channels.", show_alert=True)
-        return
-        
-    bot.answer_callback_query(call.id)
-    
-    markup = types.InlineKeyboardMarkup()
-    for channel_id, channel_info in mandatory_channels.items():
-        channel_name = channel_info.get('name', 'Unknown')
-        button_text = f"🗑️ {channel_name}"
-        markup.add(types.InlineKeyboardButton(button_text, callback_data=f'remove_channel_{channel_id}'))
-    
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data='manage_mandatory_channels'))
-    
-    try:
-        bot.edit_message_text("📢 Choose channel to delete:",
-                              call.message.chat.id, call.message.message_id, 
-                              reply_markup=markup)
-    except Exception as e:
-        logger.error(f"Error showing remove channel menu: {e}")
-
-def process_remove_channel(call):
-    """Process channel removal"""
-    channel_id = call.data.replace('remove_channel_', '')
-    
-    if channel_id in mandatory_channels:
-        channel_name = mandatory_channels[channel_id].get('name', 'Unknown')
-        if remove_mandatory_channel_db(channel_id):
-            bot.answer_callback_query(call.id, f"✅ Channel deleted: {channel_name}")
-            try:
-                bot.edit_message_text(f"✅ Mandatory channel deleted: **{channel_name}**",
-                                      call.message.chat.id, call.message.message_id,
-                                      reply_markup=create_mandatory_channels_menu(), parse_mode='Markdown')
-            except Exception as e:
-                logger.error(f"Error updating message after channel removal: {e}")
-        else:
-            bot.answer_callback_query(call.id, "❌ Failed to delete channel.", show_alert=True)
+    buttons = [[InlineKeyboardButton(label, callback_data=f"set:{key}", style="primary")] for key, label in SETTINGS_FIELDS.items()]
+    buttons.append([InlineKeyboardButton("⬅ Back", callback_data="ad:home", style="primary")])
+    text = "⚙ <b>Settings</b>\n\nSelect a setting to edit:"
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
     else:
-        bot.answer_callback_query(call.id, "❌ Channel not found.", show_alert=True)
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
 
-def list_mandatory_channels_callback(call):
-    """Show list of mandatory channels"""
-    bot.answer_callback_query(call.id)
-    
-    if not mandatory_channels:
-        message_text = "📢 **No mandatory channels currently**"
-    else:
-        message_text = "📢 **Mandatory Channels:**\n\n"
-        for channel_id, channel_info in mandatory_channels.items():
-            channel_name = channel_info.get('name', 'Unknown')
-            channel_username = channel_info.get('username', 'No username')
-            message_text += f"• **{channel_name}**\n  {channel_username or channel_id}\n\n"
-    
-    try:
-        bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id,
-                              reply_markup=create_mandatory_channels_menu(), parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error listing channels: {e}")
 
-def check_subscription_status_callback(call):
-    """Check subscription status"""
-    user_id = call.from_user.id
-    is_subscribed, not_joined = check_mandatory_subscription(user_id)
-    
-    if is_subscribed or user_id in admin_ids:
-        bot.answer_callback_query(call.id, "✅ You are subscribed to all required channels!", show_alert=True)
-        # Delete the verification message
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception as e:
-            logger.error(f"Error deleting verification message: {e}")
-        # Show main menu
-        try:
-            _logic_send_welcome(call.message)
-        except:
-            back_to_main_callback(call)
-    else:
-        bot.answer_callback_query(call.id, "❌ You haven't joined all required channels yet!", show_alert=True)
-        # Update the subscription message
-        subscription_message, markup = create_subscription_check_message(not_joined)
-        try:
-            bot.edit_message_text(subscription_message, call.message.chat.id, 
-                                  call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        except Exception as e:
-            logger.error(f"Error updating subscription message: {e}")
+async def cb_settings_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await require_owner(update):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    key = query.data.split(":")[1]
+    current = await get_setting(key, "")
+    context.user_data["st_key"] = key
+    await query.message.reply_text(
+        f"✏️ Current value of <b>{SETTINGS_FIELDS.get(key, key)}</b>:\n<code>{html.escape(current)}</code>\n\n"
+        f"Send the new value:",
+        parse_mode=ParseMode.HTML,
+    )
+    return ST_VALUE
 
-# --- Security Approval Callbacks ---
-def process_approve_file(call):
-    """Process admin approval for file"""
-    data_parts = call.data.split('_')
-    if len(data_parts) < 4:
-        bot.answer_callback_query(call.id, "❌ Invalid data.", show_alert=True)
+
+async def conv_settings_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    key = context.user_data.pop("st_key")
+    value = update.message.text.strip()
+    if key == "coin_packages":
+        try:
+            parsed = json.loads(value)
+            assert isinstance(parsed, list)
+        except Exception:
+            await update.message.reply_text(
+                '❌ Invalid JSON. Example: [{"coins": 100, "stars": 3}, {"coins": 500, "stars": 15}]'
+            )
+            context.user_data["st_key"] = key
+            return ST_VALUE
+    await set_setting(key, value)
+    await update.message.reply_text("✅ Setting updated successfully.")
+    return ConversationHandler.END
+
+
+
+async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
+        await update.effective_message.reply_text(ADMIN_ONLY_MSG)
         return
-        
-    user_id = int(data_parts[2])
-    file_name = '_'.join(data_parts[3:])
-    
-    user_folder = get_user_folder(user_id)
-    file_path = os.path.join(user_folder, file_name)
-    
-    if not os.path.exists(file_path):
-        bot.answer_callback_query(call.id, "❌ File not found.", show_alert=True)
+    is_owner = update.effective_user.id == OWNER_ID
+    await update.effective_message.reply_text(
+        f"👑 <b>Admin Panel</b> <i>({BOT_VERSION})</i>\n\nAll admin controls are now available on your keyboard below.\n"
+        "Tap <b>⬅️ Back to Main</b> anytime to return to the normal menu.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_reply_keyboard(is_owner),
+    )
+
+
+async def handle_admin_back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await is_admin(update.effective_user.id):
         return
-    
-    file_ext = os.path.splitext(file_name)[1].lower()
-    
-    try:
-        if file_ext == '.js':
-            handle_js_file(file_path, user_id, user_folder, file_name, call.message)
-        elif file_ext == '.py':
-            handle_py_file(file_path, user_id, user_folder, file_name, call.message)
-        
-        bot.answer_callback_query(call.id, "✅ File approved!")
-        bot.edit_message_text(f"✅ File `{file_name}` approved for user `{user_id}`",
-                              call.message.chat.id, call.message.message_id)
-        
-        try:
-            bot.send_message(user_id, f"✅ Your file `{file_name}` has been approved and started.")
-        except Exception as e:
-            logger.error(f"Failed to notify user {user_id}: {e}")
-            
-    except Exception as e:
-        logger.error(f"Error processing approved file: {e}")
-        bot.answer_callback_query(call.id, "❌ Error processing file.", show_alert=True)
+    await update.effective_message.reply_text(
+        "🏠 <b>Main Menu</b>", parse_mode=ParseMode.HTML, reply_markup=user_reply_keyboard(True)
+    )
 
-def process_reject_file(call):
-    """Process admin rejection for file"""
-    data_parts = call.data.split('_')
-    if len(data_parts) < 4:
-        bot.answer_callback_query(call.id, "❌ Invalid data.", show_alert=True)
+
+async def cb_admin_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("👑 <b>Admin Panel</b>\n\nSelect an option below:", parse_mode=ParseMode.HTML, reply_markup=admin_panel_keyboard())
+
+
+
+async def job_expire_premium(context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with db_conn() as db:
+        await db.execute(
+            "DELETE FROM premium WHERE is_lifetime=0 AND expiry_date IS NOT NULL AND expiry_date < ?",
+            (datetime.utcnow().isoformat(),),
+        )
+        await db.commit()
+
+
+async def job_expire_redeem_codes(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Auto-deletes redeem codes past their expiry_date, along with their
+    usage records, so admins never have to clean these up manually."""
+    now = datetime.utcnow().isoformat()
+    async with db_conn() as db:
+        cur = await db.execute(
+            "SELECT code FROM redeems WHERE expiry_date IS NOT NULL AND expiry_date < ?", (now,)
+        )
+        expired = [r[0] for r in await cur.fetchall()]
+        if expired:
+            placeholders = ",".join("?" * len(expired))
+            await db.execute(f"DELETE FROM redeems WHERE code IN ({placeholders})", expired)
+            await db.execute(f"DELETE FROM redeem_uses WHERE code IN ({placeholders})", expired)
+            await db.commit()
+            log.info("Auto-deleted %d expired redeem code(s)", len(expired))
+
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.error("Exception while handling update:", exc_info=context.error)
+
+
+
+TEXT_ROUTES = {
+    "📁 Buy Files": handle_buy_files,
+    "💎 My Wallet": handle_my_wallet,
+    "🎰 Daily Spin": handle_daily_spin,
+    "🎁 Mystery Box": handle_mystery_box,
+    "🎫 Support Ticket": handle_support_ticket_prompt,
+    "🎁 Daily Bonus": handle_daily_bonus,
+    "🚀 Invite Friends": handle_invite_friends,
+    "📊 My Stats": handle_my_stats,
+    "🏆 Leaderboard": handle_leaderboard,
+    "💬 Support": handle_support,
+    "👑 Admin Panel": handle_admin_panel,
+    "📂 Manage Files": cb_admin_managefiles,
+    "💰 Wallet Manager": cb_admin_walletmgr,
+    "🎟 Redeem Manager": cb_admin_redeemmgr,
+    "📡 Force Channels": cb_admin_fcmgr,
+    "👤 All Users": cb_admin_all_users,
+    "👑 Premium Manager": cb_admin_premiummgr,
+    "🛡 Admin Manager": cb_admin_adminmgr,
+    "📋 Admin List": cb_admin_adminmgr,
+    "📊 Statistics": cb_admin_stats,
+    "🛠 Maintenance": cb_admin_maintenance,
+    "⚙ Settings": cb_admin_settings,
+    "⬅️ Back to Main": handle_admin_back_to_main,
+}
+
+
+async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None or update.message.text is None:
         return
-        
-    user_id = int(data_parts[2])
-    file_name = '_'.join(data_parts[3:])
-    
-    user_folder = get_user_folder(user_id)
-    file_path = os.path.join(user_folder, file_name)
-    
-    if os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            logger.error(f"Error deleting rejected file: {e}")
-    
-    bot.answer_callback_query(call.id, "❌ File rejected!")
-    bot.edit_message_text(f"❌ File `{file_name}` rejected for user `{user_id}`",
-                          call.message.chat.id, call.message.message_id)
-    
-    try:
-        bot.send_message(user_id, f"❌ Your file `{file_name}` has been rejected for security reasons.")
-    except Exception as e:
-        logger.error(f"Failed to notify user {user_id}: {e}")
-
-def process_approve_zip(call):
-    """Process admin approval for ZIP file"""
-    data_parts = call.data.split('_')
-    if len(data_parts) < 4:
-        bot.answer_callback_query(call.id, "❌ Invalid data.", show_alert=True)
+    if context.user_data is not None and context.user_data.get("awaiting_reject_reason"):
+        await handle_reject_reason(update, context)
         return
-        
-    user_id = int(data_parts[2])
-    file_name = '_'.join(data_parts[3:])
-    
-    if user_id in pending_zip_files and file_name in pending_zip_files[user_id]:
-        file_content = pending_zip_files[user_id][file_name]
-        user_folder = get_user_folder(user_id)
-        temp_dir = None
-        
-        try:
-            temp_dir = tempfile.mkdtemp(prefix=f"user_{user_id}_zip_approve_")
-            zip_path = os.path.join(temp_dir, file_name)
-            
-            with open(zip_path, 'wb') as f:
-                f.write(file_content)
-            
-            process_zip_file(zip_path, user_id, user_folder, file_name, call.message, temp_dir)
-            
-            if user_id in pending_zip_files and file_name in pending_zip_files[user_id]:
-                del pending_zip_files[user_id][file_name]
-                if not pending_zip_files[user_id]:
-                    del pending_zip_files[user_id]
-            
-            bot.answer_callback_query(call.id, "✅ Archive approved!")
-            bot.edit_message_text(f"✅ Archive `{file_name}` approved for user `{user_id}`",
-                                  call.message.chat.id, call.message.message_id)
-            
-            try:
-                bot.send_message(user_id, f"✅ Your archive `{file_name}` has been approved and processed.")
-            except Exception as e:
-                logger.error(f"Failed to notify user {user_id}: {e}")
-                
-        except Exception as e:
-            logger.error(f"Error processing approved zip: {e}", exc_info=True)
-            bot.answer_callback_query(call.id, "❌ Error processing archive.", show_alert=True)
-        finally:
-            if temp_dir and os.path.exists(temp_dir):
-                try:
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    logger.error(f"Error cleaning temp dir: {e}")
-    else:
-        bot.answer_callback_query(call.id, "❌ File content not found. Ask user to re-upload.", show_alert=True)
+    text = update.message.text
+    handler = TEXT_ROUTES.get(text)
+    if handler:
+        await handler(update, context)
 
-def process_reject_zip(call):
-    """Process admin rejection for ZIP file"""
-    data_parts = call.data.split('_')
-    if len(data_parts) < 4:
-        bot.answer_callback_query(call.id, "❌ Invalid data.", show_alert=True)
-        return
-        
-    user_id = int(data_parts[2])
-    file_name = '_'.join(data_parts[3:])
-    
-    if user_id in pending_zip_files and file_name in pending_zip_files[user_id]:
-        del pending_zip_files[user_id][file_name]
-        if not pending_zip_files[user_id]:
-            del pending_zip_files[user_id]
-    
-    bot.answer_callback_query(call.id, "❌ Archive rejected!")
-    bot.edit_message_text(f"❌ Archive `{file_name}` rejected for user `{user_id}`",
-                          call.message.chat.id, call.message.message_id)
-    
-    try:
-        bot.send_message(user_id, f"❌ Your archive `{file_name}` has been rejected for security reasons.")
-    except Exception as e:
-        logger.error(f"Failed to notify user {user_id}: {e}")
 
-# --- Cleanup Function ---
-def cleanup():
-    logger.warning("Shutdown. Cleaning up processes...")
-    script_keys_to_stop = list(bot_scripts.keys()) 
-    if not script_keys_to_stop: logger.info("No scripts running. Exiting."); return
-    logger.info(f"Stopping {len(script_keys_to_stop)} scripts...")
-    for key in script_keys_to_stop:
-        if key in bot_scripts: logger.info(f"Stopping: {key}"); kill_process_tree(bot_scripts[key])
-        else: logger.info(f"Script {key} already removed.")
-    logger.warning("Cleanup finished.")
-atexit.register(cleanup)
 
-# --- Main Execution ---
-if __name__ == '__main__':
-    logger.info("="*50 + "\n🤖 DEMON Hosting Bot Starting Up...\n" + f"🐍 Python: {sys.version.split()[0]}\n" +
-                f"🔧 Base Dir: {BASE_DIR}\n📁 Upload Dir: {UPLOAD_BOTS_DIR}\n" +
-                f"📊 Data Dir: {IROTECH_DIR}\n🔑 Owner ID: {OWNER_ID}\n🛡️ Admins: {len(admin_ids)}\n" +
-                f"🚫 Banned Users: {len(banned_users)}\n📢 Mandatory Channels: {len(mandatory_channels)}\n" + "="*50)
-    keep_alive()
-    logger.info("🚀 Starting polling...")
-    while True:
-        try:
-            bot.infinity_polling(logger_level=logging.INFO, timeout=60, long_polling_timeout=30)
-        except requests.exceptions.ReadTimeout: 
-            logger.warning("Polling ReadTimeout. Restarting in 5s...")
-            time.sleep(5)
-        except requests.exceptions.ConnectionError as ce: 
-            logger.error(f"Polling ConnectionError: {ce}. Retrying in 15s...")
-            time.sleep(15)
-        except Exception as e:
-            logger.critical(f"💥 Unrecoverable polling error: {e}", exc_info=True)
-            logger.info("Restarting polling in 30s due to critical error...")
-            time.sleep(30)
-        finally: 
-            logger.warning("Polling attempt finished. Will restart if in loop.")
-            time.sleep(1)
+def build_application() -> Application:
+    concurrent_updates = int(os.environ.get("CONCURRENT_UPDATES", "512"))
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .concurrent_updates(concurrent_updates)
+        .request(HTTPXRequest(
+            connection_pool_size=concurrent_updates,
+            pool_timeout=20.0,
+            connect_timeout=15.0,
+            read_timeout=20.0,
+            write_timeout=20.0,
+        ))
+        .get_updates_request(HTTPXRequest(connection_pool_size=64, pool_timeout=20.0))
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+
+    app.add_handler(MessageHandler(filters.ALL, group_restriction_guard), group=-2)
+    app.add_handler(CallbackQueryHandler(group_restriction_guard), group=-2)
+
+    app.add_handler(MessageHandler(filters.ALL, flood_guard), group=-1)
+    app.add_handler(CallbackQueryHandler(flood_guard), group=-1)
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+
+    app.add_handler(CallbackQueryHandler(cb_verify_join, pattern="^verify_join$"))
+
+    app.add_handler(CallbackQueryHandler(cb_wallet_home, pattern="^wallet:home$"))
+    app.add_handler(CallbackQueryHandler(cb_wallet_tx, pattern="^wallet:tx:"))
+    app.add_handler(CallbackQueryHandler(cb_wallet_buy_premium, pattern="^wallet:buypremium$"))
+    app.add_handler(CallbackQueryHandler(handle_buy_coins_bdt, pattern="^wallet:buybdt$"))
+
+    app.add_handler(CallbackQueryHandler(cb_spin_go, pattern="^spin:go$"))
+    app.add_handler(CallbackQueryHandler(cb_mystery_open, pattern=r"^mystery:open:\w+:\d+$"))
+
+    ticket_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^🎫 Support Ticket$"), handle_support_ticket_prompt)],
+        states={
+            TK_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_ticket_subject)],
+            TK_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_ticket_body)],
+        },
+        fallbacks=[CallbackQueryHandler(cb_ticket_cancel, pattern="^ticket:cancel$"), CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(ticket_conv)
+
+    ticket_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_ticket_reply_start, pattern=r"^ticket:reply:\d+$")],
+        states={TK_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_ticket_reply)]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(ticket_reply_conv)
+
+    ticket_user_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_ticket_user_reply_start, pattern=r"^ticket:ureply:\d+$")],
+        states={TK_USER_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_ticket_user_reply)]},
+        fallbacks=[CallbackQueryHandler(cb_ticket_cancel, pattern="^ticket:cancel$"), CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(ticket_user_reply_conv)
+    app.add_handler(CallbackQueryHandler(cb_ticket_close, pattern=r"^ticket:close:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_premium_purchase, pattern=r"^premium:buy:\d+:\d+$"))
+
+    buycoins_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_buycoins_paid, pattern="^buycoins:paid$")],
+        states={
+            BC_STARS: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_buycoins_stars)],
+            BC_SCREENSHOT: [MessageHandler((filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, conv_buycoins_screenshot)],
+        },
+        fallbacks=[CallbackQueryHandler(cb_buycoins_cancel, pattern="^buycoins:cancel$"), CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(CallbackQueryHandler(cb_buycoins_start, pattern="^wallet:buycoins$"))
+    app.add_handler(buycoins_conv)
+    app.add_handler(CallbackQueryHandler(cb_payment_accept, pattern=r"^pay:accept:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_payment_reject, pattern=r"^pay:reject:\d+$"))
+
+    buybdt_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_buybdt_paid, pattern="^buybdt:paid$")],
+        states={
+            BDT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_buybdt_amount)],
+            BDT_PROOF: [MessageHandler((filters.PHOTO | filters.Document.ALL | filters.TEXT) & ~filters.COMMAND, conv_buybdt_proof)],
+        },
+        fallbacks=[CallbackQueryHandler(cb_buybdt_cancel, pattern="^buybdt:cancel$"), CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(buybdt_conv)
+
+    app.add_handler(MessageHandler(filters.Regex("^🎟️ Redeem Code$"), handle_redeem_prompt))
+    app.add_handler(CallbackQueryHandler(cb_redeem_cancel, pattern="^redeem:cancel$"))
+
+    redeem_enter_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_redeem_enter_start, pattern="^redeem:enter$")],
+        states={RD_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_redeem_code)]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(redeem_enter_conv)
+
+    redeem_gift_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_redeem_gift_start, pattern="^redeem:gift$")],
+        states={GC_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_gift_amount)]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(redeem_gift_conv)
+
+    app.add_handler(CallbackQueryHandler(cb_files_list, pattern=r"^files:list:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_file_view, pattern=r"^file:view:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_file_buy, pattern=r"^file:buy:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_file_download, pattern=r"^file:dl:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_my_purchases, pattern=r"^purchases:\d+$"))
+
+    app.add_handler(CallbackQueryHandler(cb_admin_home, pattern="^ad:home$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_managefiles, pattern="^ad:managefiles$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_walletmgr, pattern="^ad:walletmgr$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_redeemmgr, pattern="^ad:redeemmgr$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_fcmgr, pattern="^ad:fcmgr$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_premiummgr, pattern="^ad:premiummgr$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_adminmgr, pattern="^ad:adminmgr$"))
+    app.add_handler(CallbackQueryHandler(cb_am_remove_menu, pattern="^am:remove$"))
+    app.add_handler(CallbackQueryHandler(cb_am_log_view, pattern=r"^am:log:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_am_remove_confirm, pattern=r"^am:rm:\d+$"))
+
+    am_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_am_add_start, pattern="^am:add$")],
+        states={
+            AM_ADD_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_am_add_user)],
+            AM_ADD_ROLE: [CallbackQueryHandler(cb_am_add_role, pattern=r"^am:role:(senior|junior)$")],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(am_add_conv)
+    app.add_handler(CallbackQueryHandler(cb_admin_stats, pattern="^ad:stats$"))
+    app.add_handler(CallbackQueryHandler(cb_stats_top_files, pattern="^stats:topfiles$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_maintenance, pattern="^ad:maintenance$"))
+    app.add_handler(CallbackQueryHandler(cb_mt_toggle, pattern="^mt:(on|off)$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_settings, pattern="^ad:settings$"))
+
+    upload_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(cb_admin_upload_start, pattern="^ad:upload$"),
+            MessageHandler(filters.Regex("^📤 Upload File$"), cb_admin_upload_start),
+        ],
+        states={
+            UP_FILE: [MessageHandler(
+                (filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO | filters.VOICE | filters.ANIMATION) & ~filters.COMMAND,
+                conv_upload_file
+            )],
+            UP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_upload_name)],
+            UP_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_upload_desc)],
+            UP_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_upload_price)],
+            UP_PREVIEW: [
+                CallbackQueryHandler(cb_upload_publish, pattern="^up:publish$"),
+                CallbackQueryHandler(cb_upload_edit, pattern="^up:edit$"),
+                CallbackQueryHandler(cb_upload_cancel, pattern="^up:cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(upload_conv)
+
+    app.add_handler(CallbackQueryHandler(cb_mf_list, pattern=r"^mf:list:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_mf_view, pattern=r"^mf:view:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_mf_delete, pattern=r"^mf:delete:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_mf_delete_confirm, pattern=r"^mf:delconfirm:\d+$"))
+
+    edit_field_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_mf_edit_field, pattern=r"^mf:(ename|edesc|eprice|etier):\d+$")],
+        states={EF_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_edit_field_value)]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(edit_field_conv)
+
+    fc_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_fc_add_start, pattern="^fc:add$")],
+        states={
+            FC_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_fc_add)],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(fc_add_conv)
+    app.add_handler(CallbackQueryHandler(cb_fc_list, pattern="^fc:list$"))
+    app.add_handler(CallbackQueryHandler(cb_fc_remove_menu, pattern="^fc:remove$"))
+    app.add_handler(CallbackQueryHandler(cb_fc_remove_confirm, pattern=r"^fc:rm:\d+$"))
+
+    wm_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_wm_action_start, pattern="^wm:(add|remove|reset|setbal)$")],
+        states={
+            UM_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_wm_user_id)],
+            UM_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_wm_amount)],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(wm_conv)
+    app.add_handler(CallbackQueryHandler(cb_wm_history, pattern="^wm:history$"))
+
+    wb_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_wm_bulk_start, pattern="^wm:bulk$")],
+        states={
+            WB_IDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_wm_bulk_ids)],
+            WB_ACTION: [
+                CallbackQueryHandler(cb_wb_action_coins, pattern="^wb:(add|remove)$"),
+                CallbackQueryHandler(cb_wb_action_ban, pattern="^wb:(ban|unban)$"),
+                CallbackQueryHandler(cb_wb_action_premium_menu, pattern="^wb:premium$"),
+                CallbackQueryHandler(cb_wb_cancel, pattern="^wb:cancel$"),
+            ],
+            WB_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_wm_bulk_amount)],
+            WB_PREMIUM: [CallbackQueryHandler(cb_wb_action_premium_set, pattern=r"^wb:pset:\d+$")],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(wb_conv)
+
+    app.add_handler(CallbackQueryHandler(cb_pending_payments_list, pattern=r"^pp:list:\d+$"))
+
+    rm_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_rm_create_start, pattern="^rm:create$")],
+        states={
+            RM_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_code)],
+            RM_COINS: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_coins)],
+            RM_PREMIUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_premium)],
+            RM_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_limit)],
+            RM_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_expiry)],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(rm_conv)
+    app.add_handler(CallbackQueryHandler(cb_rm_list, pattern="^rm:list$"))
+    app.add_handler(CallbackQueryHandler(cb_rm_delete_all_confirm, pattern="^rm:delall$"))
+    app.add_handler(CallbackQueryHandler(cb_rm_delete_all_execute, pattern="^rm:delallconfirm$"))
+
+    rm_delete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_rm_delete_start, pattern="^rm:delstart$")],
+        states={RM_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_rm_delete)]},
+        fallbacks=[CallbackQueryHandler(cb_rm_delete_cancel, pattern="^rm:delcancel$"), CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(rm_delete_conv)
+
+    um_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(cb_admin_usermgr, pattern="^ad:usermgr$"),
+            MessageHandler(filters.Regex("^👥 User Manager$"), cb_admin_usermgr),
+            CallbackQueryHandler(cb_um_coins_start, pattern=r"^um:(addc|remc):\d+$"),
+        ],
+        states={
+            UM_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_um_search)],
+            UM_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_um_coins_amount)],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(um_conv)
+    app.add_handler(CallbackQueryHandler(cb_um_ban, pattern=r"^um:(ban|unban):\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_um_premium, pattern=r"^um:(givep|remp):\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_um_pset, pattern=r"^um:pset:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_um_back, pattern=r"^um:back:\d+$"))
+
+    app.add_handler(CallbackQueryHandler(cb_au_list, pattern=r"^au:list:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_au_view, pattern=r"^au:view:\d+:\d+$"))
+
+    broadcast_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(cb_admin_broadcast_start, pattern="^ad:broadcast$"),
+            MessageHandler(filters.Regex("^📢 Broadcast$"), cb_admin_broadcast_start),
+        ],
+        states={BR_CONTENT: [MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.ANIMATION | filters.Sticker.ALL |
+             filters.Document.ALL | filters.VOICE | filters.AUDIO) & ~filters.COMMAND,
+            conv_broadcast_content
+        )]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(broadcast_conv)
+
+    settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_settings_field, pattern=r"^set:\w+$")],
+        states={ST_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, conv_settings_value)]},
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        per_message=False,
+    )
+    app.add_handler(settings_conv)
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
+
+    app.add_handler(CommandHandler("cancel", cmd_cancel), group=1)
+
+    app.add_error_handler(error_handler)
+    return app
+
+
+async def post_init(app: Application) -> None:
+    await init_db()
+    await init_db_pool()
+    if app.job_queue:
+        app.job_queue.run_repeating(job_expire_premium, interval=3600, first=10)
+        app.job_queue.run_repeating(job_expire_redeem_codes, interval=3600, first=15)
+    log.info("Bot initialized and ready.")
+
+
+async def post_shutdown(app: Application) -> None:
+    await close_db_pool()
+
+
+def main() -> None:
+    app = build_application()
+    log.info("Starting FILE STORE BOT 🛍️...")
+    app.run_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
