@@ -55,9 +55,9 @@ def _load_token() -> str:
     )
 
 
-BOT_TOKEN = "8866988131:AAEQfxyC6A-j9mb3nBCV3O7OaaCkHqiAaqw"
+BOT_TOKEN = "8834449405:AAGqoX_Bn1_QUpAeBMlh8TFAANYRVR70490"
 OWNER_ID = int(os.environ.get("OWNER_ID", "7981498656"))
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "FILESxSTORExROBOT")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "ARMAANxFILExSTORExBOT")
 BOT_VERSION = "v15.0"
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
